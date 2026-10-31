@@ -64,7 +64,7 @@ func (s *aulaSession) isReady() bool {
 // aula.InvalidSessionError when the server never managed to log in.
 func (s *aulaSession) call(fn func(client *aula.Client) (any, error)) (any, error) {
 	if !s.ready.Load() {
-		return nil, aula.NewInvalidSessionError("The Aula session is invalid or expired. Run the goaula_login " +
+		return nil, aula.NewInvalidSessionError("The Aula session is invalid or expired. Run the aula_login " +
 			"tool to log in interactively, refresh ~/.aula/session.txt (e.g. by running goaula-login), and " +
 			"try again.")
 	}
@@ -74,7 +74,7 @@ func (s *aulaSession) call(fn func(client *aula.Client) (any, error)) (any, erro
 }
 
 // relogin logs in a fresh client with the current session token (e.g. after
-// the goaula_login tool captured a new one) and swaps it in. On failure the
+// the aula_login tool captured a new one) and swaps it in. On failure the
 // session stays not-ready.
 func (s *aulaSession) relogin() error {
 	s.mu.Lock()
@@ -115,7 +115,7 @@ func (s *aulaSession) startPing(interval time.Duration) {
 		if err := aula.PingLoop(s.ping, interval, stop); err != nil {
 			s.ready.Store(false)
 			slog.Error("Aula session expired — refresh ~/.aula/session.txt "+
-				"(e.g. run goaula-login) and restart the MCP server, or use the goaula_login tool.",
+				"(e.g. run goaula-login) and restart the MCP server, or use the aula_login tool.",
 				"error", err)
 		}
 	}()

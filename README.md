@@ -109,7 +109,7 @@ type SessionProvider interface {
 ### Login flow
 
 The interactive login flow lives in the shared `login` package and is used by
-both the `goaula-login` CLI and the `goaula_login` MCP tool — either can be
+both the `goaula-login` CLI and the `aula_login` MCP tool — either can be
 used to (re)establish a session.
 
 It opens a visible Chrome window and polls for the `PHPSESSID`
@@ -155,7 +155,7 @@ so LLM clients (Claude Desktop, OpenCode, etc.) can query posts, messages, threa
 people. It uses the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
 
 The server reads the session token from `~/.aula/session.txt`, exactly like the client library. If the session has
-expired, the server still starts and every tool then returns an actionable error. The `goaula_login` tool can then
+expired, the server still starts and every tool then returns an actionable error. The `aula_login` tool can then
 re-establish the session interactively (opening the shared login flow's browser) — no `goaula-login` binary required.
 
 ### Build and run
@@ -169,9 +169,9 @@ go build -o goaula-mcp ./cmd/goaula-mcp
 
 | Tool | Description |
 |------|-------------|
-| `goaula_login` | Start interactive login: opens a Chrome window with the MitID flow and returns the QR screenshot |
-| `goaula_check_auth` | Poll for completed login after `goaula_login` (may return a refreshed QR) |
-| `goaula_session_status` | Check whether the current session is valid |
+| `aula_login` | Start interactive login: opens a Chrome window with the MitID flow and returns the QR screenshot |
+| `aula_check_auth` | Poll for completed login after `aula_login` (may return a refreshed QR) |
+| `aula_session_status` | Check whether the current session is valid |
 | `aula_whoami` | Current profile, children, institutions and active context (IDs) |
 | `aula_set_context` | Switch the current child/institution context |
 | `aula_search_people` | Find parents, children, teachers etc. by name and role |
