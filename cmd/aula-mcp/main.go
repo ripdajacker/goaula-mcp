@@ -27,6 +27,13 @@ const serverInstructions = "Read-only access to the Danish Aula school portal (a
 	"Some tools are scoped to the current child/institution context, which can be changed " +
 	"with 'aula_set_context'."
 
+// Build information, overridable via -ldflags "-X ..." (see build.sh).
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	config := &aula.Config{
 		Session: aula.NewFileSessionProvider(),
