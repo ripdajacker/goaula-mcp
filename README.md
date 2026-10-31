@@ -8,7 +8,7 @@ A Go client library for theaula.dk, plus an MCP server that exposes it to LLM cl
 |------|---------|
 | module root (package `aula`) | Client library: HTTP connector, models, MeeBook client, HTML writers |
 | `cmd/goaula-mcp` | MCP server exposing the Aula API as Model Context Protocol tools over stdio |
-| `cmd/aula-login` | Interactive login helper that captures the Aula session via Chrome |
+| `cmd/goaula-login` | Interactive login helper that captures the Aula session via Chrome |
 
 ## Features
 
@@ -107,7 +107,7 @@ type SessionProvider interface {
 
 ### Login helper
 
-`cmd/aula-login` opens a visible Chrome window and polls for the `PHPSESSID` 
+`cmd/goaula-login` opens a visible Chrome window and polls for the `PHPSESSID` 
 cookie until you have completed the MitID login, then stores the session ID 
 in `~/.aula/session.txt`. Both MitID methods work — the flow is the same:
 
@@ -126,15 +126,22 @@ tool will redirect you to a 2-factor MitID login.
 Skip with `--skip-stepup` in the unlikely case you need to skip this.
 
 ```bash
-go build -o aula-login ./cmd/aula-login
-./aula-login                        # headed Chrome
-./aula-login --headless             # no window; QR screenshot written to file
-./aula-login --force                # re-login even if the stored session is valid
-./aula-login --browser-path /usr/bin/chromium --timeout 5m
+go build -o goaula-login ./cmd/goaula-login
+./goaula-login                        # headed Chrome
+./goaula-login --headless             # no window; QR screenshot written to file
+./goaula-login --force                # re-login even if the stored session is valid
+./goaula-login --browser-path /usr/bin/chromium --timeout 5m
+./goaula-login --ping            # after login, keep pinging until Ctrl-C
 ```
 
 Useful flags: `--headless`, `--browser-path`, `--session-file`, `--qr-out`,
-`--timeout` (default 10m), `--force`, `--v`.
+`--settle` (default 10s), `--timeout` (default 10m), `--force`, `--skip-stepup`,
+`--ping`, `--ping-interval` (default 15m), `--v`.
+
+With `--ping`, the tool stays in the foreground after login and pings the
+API periodically to keep the session token alive — handy for running it from a
+terminal or cron without an MCP client attached. After 3 consecutive ping
+failures the session is considered expired and the tool exits with an error.
 
 ## MCP server
 
@@ -184,6 +191,14 @@ go build -o goaula-mcp ./cmd/goaula-mcp
 
 Optional environment variable `AULA_MCP_API_URL` overrides the Aula API base URL
 (defaults to `https://www.aula.dk/api/`).
+
+The server keeps the session token alive with a periodic ping
+(`profiles.getProfilesByLogin`, the cheapest authenticated call), like the TS
+`aula-mcp-server`. `GOAULA_MCP_PING_INTERVAL` sets the interval — a duration
+like `15m`/`1h` or plain minutes like `15` (default `15m`, `0`/`off` disables).
+After 3 consecutive ping failures the session is marked expired and tools
+return the "refresh the session" error until the process is restarted with a
+fresh session file.
 
 ## License
 

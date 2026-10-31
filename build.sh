@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Cross-compiles the goaula-mcp and aula-login binaries for Linux, macOS and
+# Cross-compiles the goaula-mcp and goaula-login binaries for Linux, macOS and
 # Windows. Output goes to dist/ as <name>-<os>-<arch>[.exe], plus SHA256
 # checksums.
 #
@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 MODULE="github.com/ripdajacker/goaula-mcp"
-CMDS=("cmd/goaula-mcp" "cmd/aula-login")
+CMDS=("cmd/goaula-mcp" "cmd/goaula-login")
 OUT_DIR="dist"
 VERSION="${VERSION:-dev}"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo none)"

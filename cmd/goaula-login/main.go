@@ -1,4 +1,4 @@
-// Command aula-login opens a visible Chrome window for interactive Aula login
+// Command goaula-login opens a visible Chrome window for interactive Aula login
 // and stores the captured session ID (PHPSESSID) in ~/.aula/session.txt, so the
 // client library and the goaula-mcp MCP server can use it.
 //
@@ -17,10 +17,11 @@
 //
 // Usage:
 //
-//	aula-login                          # headed Chrome, interactive login
-//	aula-login --headless               # no window; QR screenshots written to file
-//	aula-login --browser-path /usr/bin/chromium
-//	aula-login --force                  # re-login even if the stored session is valid
+//	goaula-login                          # headed Chrome, interactive login
+//	goaula-login --headless               # no window; QR screenshots written to file
+//	goaula-login --browser-path /usr/bin/chromium
+//	goaula-login --force                  # re-login even if the stored session is valid
+//	goaula-login --ping                   # after login, ping Aula until Ctrl-C
 package main
 
 import (
@@ -34,9 +35,11 @@ import (
 	"net/http/cookiejar"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
@@ -51,14 +54,34 @@ const (
 	qrRefreshEvery = 4 * time.Minute // Aula/MitID QR codes expire after a few minutes
 )
 
+// maxPingFailures is the number of consecutive ping failures before
+// the session is considered expired.
+const maxPingFailures = 3
+
+// options bundles the run() configuration.
+type options struct {
+	startURL     string
+	headless     bool
+	browserPath  string
+	qrOut        string
+	settle       time.Duration // token stability window before saving
+	timeout      time.Duration // login flow deadline
+	skipStepUp   bool
+	ping         bool          // keep pinging after login until interrupted
+	pingInterval time.Duration // ping interval
+	provider     *aula.FileSessionProvider
+}
+
 func main() {
 	var (
 		headless    = flag.Bool("headless", false, "run Chrome headless (QR is only available via the screenshot file)")
 		browserPath = flag.String("browser-path", "", "path to the Chrome/Chromium executable (default: auto-detect)")
 		sessionFile = flag.String("session-file", "", "path of the session file (default: ~/.aula/session.txt)")
-		qrOut       = flag.String("qr-out", "aula-login-qr.png", "file to write the QR screenshot to (empty disables)")
+		qrOut       = flag.String("qr-out", "goaula-login-qr.png", "file to write the QR screenshot to (empty disables)")
 		settleFlag  = flag.Duration("settle", 10*time.Second, "how long the session token must stay unchanged before it is saved (the secure-login step-up via the UNI-Login broker rotates the token, and may require user interaction)")
 		noStepUp    = flag.Bool("skip-stepup", false, "skip the secure-login step-up (session will have the basic authentication level)")
+		pingFlag    = flag.Bool("ping", false, "after login, ping the API synchronously to keep the session alive until interrupted (Ctrl-C)")
+		pingInt     = flag.Duration("ping-interval", 15*time.Minute, "ping interval when --ping is set")
 		timeout     = flag.Duration("timeout", 10*time.Minute, "how long to wait for login to complete")
 		force       = flag.Bool("force", false, "re-login even if the stored session is still valid")
 		startURL    = flag.String("url", "https://www.aula.dk/", "Aula URL to open")
@@ -83,7 +106,18 @@ func main() {
 		return
 	}
 
-	if err := run(*startURL, *headless, *browserPath, *qrOut, *settleFlag, *timeout, *noStepUp, provider); err != nil {
+	if err := run(options{
+		startURL:     *startURL,
+		headless:     *headless,
+		browserPath:  *browserPath,
+		qrOut:        *qrOut,
+		settle:       *settleFlag,
+		timeout:      *timeout,
+		skipStepUp:   *noStepUp,
+		ping:         *pingFlag,
+		pingInterval: *pingInt,
+		provider:     provider,
+	}); err != nil {
 		slog.Error("Login failed", "error", err)
 		os.Exit(1)
 	}
@@ -242,23 +276,24 @@ func haveValidSession(provider aula.SessionProvider) bool {
 	return true
 }
 
-func run(startURL string, headless bool, browserPath, qrOut string, settle, timeout time.Duration, skipStepUp bool, provider *aula.FileSessionProvider) error {
+func run(opts options) error {
+	browserPath, qrOut, settle, timeout := opts.browserPath, opts.qrOut, opts.settle, opts.timeout
 	// DefaultExecAllocatorOptions includes Headless; add VisibleWindow for a
 	// headed, maximized window.
-	opts := chromedp.DefaultExecAllocatorOptions[:]
-	if !headless {
-		opts = append(opts, chromedp.VisibleWindow)
+	allocOpts := chromedp.DefaultExecAllocatorOptions[:]
+	if !opts.headless {
+		allocOpts = append(allocOpts, chromedp.VisibleWindow)
 	}
 	exe, err := findBrowser(browserPath)
 	if err != nil {
 		return err
 	}
 	slog.Debug("Using browser", "executable", exe)
-	opts = append(opts, chromedp.ExecPath(exe))
+	allocOpts = append(allocOpts, chromedp.ExecPath(exe))
 
 	// The timeout context must not be the one that launches the browser
 	// (that would kill the browser on expiry), so layer them.
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), allocOpts...)
 	defer allocCancel()
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 	defer browserCancel()
@@ -269,10 +304,10 @@ func run(startURL string, headless bool, browserPath, qrOut string, settle, time
 		"or a physical MitID code reader.")
 
 	if err := chromedp.Do(ctx,
-		chromedp.Navigate(startURL),
+		chromedp.Navigate(opts.startURL),
 		chromedp.WaitVisible(chromedp.CSS("body")),
 	); err != nil {
-		return fmt.Errorf("navigating to %s: %w", startURL, err)
+		return fmt.Errorf("navigating to %s: %w", opts.startURL, err)
 	}
 	lastRefresh := time.Now()
 	time.Sleep(pageSettleTime)
@@ -328,15 +363,15 @@ func run(startURL string, headless bool, browserPath, qrOut string, settle, time
 				continue
 			}
 
-			if err := provider.SaveSessionID(sess); err != nil {
+			if err := opts.provider.SaveSessionID(sess); err != nil {
 				return fmt.Errorf("saving session: %w", err)
 			}
-			fmt.Printf("Authenticated! Session ID saved to %s\n", provider.Path)
+			fmt.Printf("Authenticated! Session ID saved to %s\n", opts.provider.Path)
 
 			// Only do the SAML step-up if the session isn't already
 			// stepped up — whether a plain login yields a privileged
 			// token depends on the user's MitID specifics.
-			if !skipStepUp && !steppedUp {
+			if !opts.skipStepUp && !steppedUp {
 				steppedUp = true
 				if sessionSteppedUp(sess) {
 					slog.Info("Session already has the secure-login (step-up) level — skipping")
@@ -357,6 +392,10 @@ func run(startURL string, headless bool, browserPath, qrOut string, settle, time
 				slog.Warn("Captured session did not verify against the API; continuing to watch for a rotated token", "error", err)
 				settleStart = time.Now()
 				continue
+			}
+			if opts.ping {
+				browserCancel() // the browser is no longer needed
+				return ping(sess, opts.pingInterval, opts.provider)
 			}
 			return nil
 		}
@@ -453,4 +492,45 @@ func verifySession(sess string) error {
 	client := aula.NewClient(&aula.Config{Session: aula.StaticSessionProvider{ID: sess}})
 	defer client.Close()
 	return client.Login()
+}
+
+// ping keeps the session token alive with periodic pings (same pattern as
+// the MCP server's ping loop), so the session can be kept warm from a terminal
+// without an MCP client attached. It runs synchronously on the main goroutine,
+// blocking until interrupted (Ctrl-C) or until the session expires after
+// maxPingFailures consecutive ping failures.
+func ping(sess string, interval time.Duration, provider *aula.FileSessionProvider) error {
+	client := aula.NewClient(&aula.Config{Session: aula.StaticSessionProvider{ID: sess}})
+	defer client.Close()
+	if err := client.Login(); err != nil {
+		return fmt.Errorf("ping login: %w", err)
+	}
+
+	fmt.Printf("Pinging Aula every %s to keep the session alive — press Ctrl-C to exit.\n", interval)
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	failures := 0
+	for {
+		select {
+		case <-sig:
+			fmt.Println("\nExiting — session remains in", provider.Path)
+			return nil
+		case <-ticker.C:
+		}
+
+		if err := client.PingAula(); err != nil {
+			failures++
+			slog.Warn("Ping failed", "consecutiveFailures", failures, "error", err)
+			if failures >= maxPingFailures {
+				return errors.New("session expired — run goaula-login again to re-authenticate")
+			}
+			continue
+		}
+		failures = 0
+		slog.Debug("Ping OK")
+	}
 }

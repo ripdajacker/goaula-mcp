@@ -6,9 +6,14 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ripdajacker/goaula-mcp"
 )
+
+// maxPingFailures is the number of consecutive ping failures before the
+// session is marked expired.
+const maxPingFailures = 3
 
 // aulaSession holds the aula.Client for the MCP server and serializes access to it
 // (the client and its cookie state are not thread-safe).
@@ -20,6 +25,8 @@ type aulaSession struct {
 	client *aula.Client
 	mu     sync.Mutex
 	ready  atomic.Bool
+
+	pingStop chan struct{} // non-nil while the ping goroutine runs
 }
 
 func newAulaSession(client *aula.Client) *aulaSession {
@@ -61,7 +68,61 @@ func (s *aulaSession) call(fn func(client *aula.Client) (any, error)) (any, erro
 	return fn(s.client)
 }
 
-// close closes the underlying client, releasing HTTP resources.
+// close closes the underlying client, releasing HTTP resources, and stops the
+// ping goroutine.
 func (s *aulaSession) close() {
+	s.stopPing()
 	s.client.Close()
+}
+
+// startPing pings the Aula API on a ticker to keep the session token
+// alive (same pattern as the TS aula-mcp-server). After maxPingFailures
+// consecutive failures the session is marked expired: tools return the
+// actionable "refresh the session" error until the process is restarted with
+// a valid session file.
+func (s *aulaSession) startPing(interval time.Duration) {
+	if s.pingStop != nil {
+		return // already running
+	}
+	stop := make(chan struct{})
+	s.pingStop = stop
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		failures := 0
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+			}
+
+			s.mu.Lock()
+			err := s.client.PingAula()
+			s.mu.Unlock()
+			if err == nil {
+				failures = 0
+				slog.Debug("Aula ping OK")
+				continue
+			}
+			failures++
+			slog.Warn("Aula ping failed",
+				"consecutiveFailures", failures, "error", err)
+			if failures >= maxPingFailures {
+				s.ready.Store(false)
+				slog.Error("Aula session expired — refresh ~/.aula/session.txt " +
+					"(e.g. run goaula-login) and restart the MCP server.")
+				return
+			}
+		}
+	}()
+}
+
+// stopPing signals the ping goroutine to stop.
+func (s *aulaSession) stopPing() {
+	if s.pingStop != nil {
+		close(s.pingStop)
+		s.pingStop = nil
+	}
 }
