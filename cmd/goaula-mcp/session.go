@@ -8,20 +8,23 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ripdajacker/goaula-mcp"
+	aula "github.com/ripdajacker/goaula-mcp"
 )
 
 // maxPingFailures is the number of consecutive ping failures before the
-// session is marked expired.
-const maxPingFailures = 3
+// session is marked expired. The expiry handling itself lives in
+// aula.PingLoop.
+const maxPingFailures = aula.MaxPingFailures
 
 // aulaSession holds the aula.Client for the MCP server and serializes access to it
 // (the client and its cookie state are not thread-safe).
 //
-// The session token is assumed valid, exactly like the underlying client: login() reads
-// it via the SessionProvider. If login fails, the MCP server still starts — tools then
-// return an actionable error instead of the whole server refusing to boot.
+// The session token is assumed valid, exactly like the underlying client: the
+// first login reads it via the SessionProvider. If login fails, the MCP server
+// still starts — tools then return an actionable error instead of the whole
+// server refusing to boot.
 type aulaSession struct {
+	config *aula.Config
 	client *aula.Client
 	mu     sync.Mutex
 	ready  atomic.Bool
@@ -29,13 +32,15 @@ type aulaSession struct {
 	pingStop chan struct{} // non-nil while the ping goroutine runs
 }
 
-func newAulaSession(client *aula.Client) *aulaSession {
-	return &aulaSession{client: client}
+func newAulaSession(config *aula.Config) *aulaSession {
+	return &aulaSession{
+		config: config,
+		client: aula.NewClient(config),
+	}
 }
 
 // login attempts to log in. On failure the server keeps running, but every tool call
-// returns an actionable session error until the process is restarted with a valid
-// session file.
+// returns an actionable session error until the session is refreshed.
 func (s *aulaSession) login() {
 	if err := s.client.Login(); err != nil {
 		var invalidSession *aula.InvalidSessionError
@@ -59,27 +64,46 @@ func (s *aulaSession) isReady() bool {
 // aula.InvalidSessionError when the server never managed to log in.
 func (s *aulaSession) call(fn func(client *aula.Client) (any, error)) (any, error) {
 	if !s.ready.Load() {
-		return nil, aula.NewInvalidSessionError("The Aula session is invalid or expired. Refresh the session in " +
-			"~/.aula/session.txt (for example by running the AulaSessionCapture login flow) and " +
-			"restart the MCP server.")
+		return nil, aula.NewInvalidSessionError("The Aula session is invalid or expired. Run the goaula_login " +
+			"tool to log in interactively, refresh ~/.aula/session.txt (e.g. by running goaula-login), and " +
+			"try again.")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return fn(s.client)
 }
 
-// close closes the underlying client, releasing HTTP resources, and stops the
-// ping goroutine.
-func (s *aulaSession) close() {
-	s.stopPing()
-	s.client.Close()
+// relogin logs in a fresh client with the current session token (e.g. after
+// the goaula_login tool captured a new one) and swaps it in. On failure the
+// session stays not-ready.
+func (s *aulaSession) relogin() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	client := aula.NewClient(s.config)
+	if err := client.Login(); err != nil {
+		client.Close()
+		return err
+	}
+	old := s.client
+	s.client = client
+	old.Close()
+	s.ready.Store(true)
+	return nil
 }
 
-// startPing pings the Aula API on a ticker to keep the session token
-// alive (same pattern as the TS aula-mcp-server). After maxPingFailures
-// consecutive failures the session is marked expired: tools return the
-// actionable "refresh the session" error until the process is restarted with
-// a valid session file.
+// ping performs a single keepalive ping, serialized with tool calls.
+func (s *aulaSession) ping() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.client.PingAula()
+}
+
+// startPing pings the Aula API on a ticker to keep the session token alive
+// (same pattern as the TS aula-mcp-server). After MaxPingFailures consecutive
+// failures the session is marked expired: tools return the actionable
+// "refresh the session" error until the process is restarted with a valid
+// session file.
 func (s *aulaSession) startPing(interval time.Duration) {
 	if s.pingStop != nil {
 		return // already running
@@ -88,33 +112,11 @@ func (s *aulaSession) startPing(interval time.Duration) {
 	s.pingStop = stop
 
 	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		failures := 0
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-			}
-
-			s.mu.Lock()
-			err := s.client.PingAula()
-			s.mu.Unlock()
-			if err == nil {
-				failures = 0
-				slog.Debug("Aula ping OK")
-				continue
-			}
-			failures++
-			slog.Warn("Aula ping failed",
-				"consecutiveFailures", failures, "error", err)
-			if failures >= maxPingFailures {
-				s.ready.Store(false)
-				slog.Error("Aula session expired — refresh ~/.aula/session.txt " +
-					"(e.g. run goaula-login) and restart the MCP server.")
-				return
-			}
+		if err := aula.PingLoop(s.ping, interval, stop); err != nil {
+			s.ready.Store(false)
+			slog.Error("Aula session expired — refresh ~/.aula/session.txt "+
+				"(e.g. run goaula-login) and restart the MCP server, or use the goaula_login tool.",
+				"error", err)
 		}
 	}()
 }
@@ -125,4 +127,11 @@ func (s *aulaSession) stopPing() {
 		close(s.pingStop)
 		s.pingStop = nil
 	}
+}
+
+// close closes the underlying client, releasing HTTP resources, and stops the
+// ping goroutine.
+func (s *aulaSession) close() {
+	s.stopPing()
+	s.client.Close()
 }

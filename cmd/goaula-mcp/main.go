@@ -47,8 +47,7 @@ func main() {
 		config.APIURL = apiURL
 	}
 
-	client := aula.NewClient(config)
-	session := newAulaSession(client)
+	session := newAulaSession(config)
 	session.login()
 
 	server := mcp.NewServer(
@@ -56,7 +55,8 @@ func main() {
 		&mcp.ServerOptions{Instructions: serverInstructions})
 
 	toolCount := registerTools(server, session)
-	slog.Info("Aula MCP server started", "tools", toolCount, "sessionReady", session.isReady())
+	registerAuthTools(server, session)
+	slog.Info("Aula MCP server started", "tools", toolCount+3, "sessionReady", session.isReady())
 
 	// Keep the session token alive with periodic pings, like the TS
 	// aula-mcp-server. After several consecutive failures the session is

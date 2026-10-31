@@ -6,9 +6,10 @@ A Go client library for theaula.dk, plus an MCP server that exposes it to LLM cl
 
 | Path | Purpose |
 |------|---------|
-| module root (package `aula`) | Client library: HTTP connector, models, MeeBook client, HTML writers |
+| module root (package `aula`) | Client library: HTTP connector, models, MeeBook client, HTML writers, session ping loop |
+| `login` | Shared interactive login flow: browser automation (chromedp), MitID session capture, QR screenshots, secure-login step-up |
 | `cmd/goaula-mcp` | MCP server exposing the Aula API as Model Context Protocol tools over stdio |
-| `cmd/goaula-login` | Interactive login helper that captures the Aula session via Chrome |
+| `cmd/goaula-login` | Interactive login CLI that captures the Aula session via Chrome |
 
 ## Features
 
@@ -105,10 +106,14 @@ type SessionProvider interface {
 }
 ```
 
-### Login helper
+### Login flow
 
-`cmd/goaula-login` opens a visible Chrome window and polls for the `PHPSESSID` 
-cookie until you have completed the MitID login, then stores the session ID 
+The interactive login flow lives in the shared `login` package and is used by
+both the `goaula-login` CLI and the `goaula_login` MCP tool — either can be
+used to (re)establish a session.
+
+It opens a visible Chrome window and polls for the `PHPSESSID`
+cookie until you have completed the MitID login, then stores the session ID
 in `~/.aula/session.txt`. Both MitID methods work — the flow is the same:
 
 - **MitID app** — scan the QR code in the browser window (or in the screenshot
@@ -150,8 +155,8 @@ so LLM clients (Claude Desktop, OpenCode, etc.) can query posts, messages, threa
 people. It uses the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
 
 The server reads the session token from `~/.aula/session.txt`, exactly like the client library. If the session has
-expired, the server still starts and every tool then returns an actionable error telling you to refresh the session
-file and restart.
+expired, the server still starts and every tool then returns an actionable error. The `goaula_login` tool can then
+re-establish the session interactively (opening the shared login flow's browser) — no `goaula-login` binary required.
 
 ### Build and run
 
@@ -164,6 +169,9 @@ go build -o goaula-mcp ./cmd/goaula-mcp
 
 | Tool | Description |
 |------|-------------|
+| `goaula_login` | Start interactive login: opens a Chrome window with the MitID flow and returns the QR screenshot |
+| `goaula_check_auth` | Poll for completed login after `goaula_login` (may return a refreshed QR) |
+| `goaula_session_status` | Check whether the current session is valid |
 | `aula_whoami` | Current profile, children, institutions and active context (IDs) |
 | `aula_set_context` | Switch the current child/institution context |
 | `aula_search_people` | Find parents, children, teachers etc. by name and role |

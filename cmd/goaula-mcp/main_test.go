@@ -22,11 +22,7 @@ func TestPingInterval(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run("env="+c.env, func(t *testing.T) {
-			if c.env != "" {
-				t.Setenv("GOAULA_MCP_PING_INTERVAL", c.env)
-			} else {
-				t.Setenv("GOAULA_MCP_PING_INTERVAL", "")
-			}
+			t.Setenv("GOAULA_MCP_PING_INTERVAL", c.env)
 			got, ok := pingInterval()
 			if ok != c.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, c.wantOK)

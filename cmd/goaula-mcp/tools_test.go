@@ -11,7 +11,7 @@ import (
 // TestSessionNotReady verifies tool calls on a session that never logged in get an
 // actionable InvalidSessionError.
 func TestSessionNotReady(t *testing.T) {
-	session := newAulaSession(aula.NewClient(&aula.Config{}))
+	session := newAulaSession(&aula.Config{})
 
 	if session.isReady() {
 		t.Fatal("session should not be ready before login")
