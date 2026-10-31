@@ -51,7 +51,7 @@ func main() {
 	session.login()
 
 	server := mcp.NewServer(
-		&mcp.Implementation{Name: "aula", Version: "1.0.0"},
+		&mcp.Implementation{Name: "aula", Version: version},
 		&mcp.ServerOptions{Instructions: serverInstructions})
 
 	toolCount := registerTools(server, session)
