@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Cross-compiles the goaula-mcp binary for Linux, macOS and Windows.
-# Output goes to dist/ as goaula-mcp-<os>-<arch>[.exe], plus SHA256 checksums.
+# Cross-compiles the goaula-mcp and aula-login binaries for Linux, macOS and
+# Windows. Output goes to dist/ as <name>-<os>-<arch>[.exe], plus SHA256
+# checksums.
 #
 # Usage:
 #   ./build.sh                # build all platforms
@@ -12,8 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 MODULE="github.com/ripdajacker/goaula-mcp"
-CMD="cmd/goaula-mcp"
-NAME="goaula-mcp"
+CMDS=("cmd/goaula-mcp" "cmd/aula-login")
 OUT_DIR="dist"
 VERSION="${VERSION:-dev}"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo none)"
@@ -49,18 +49,22 @@ for target in "${TARGETS[@]}"; do
   IFS='/' read -r GOOS GOARCH GOARM <<< "$target"
   suffix=""
   [[ "$GOOS" == "windows" ]] && suffix=".exe"
-  out="${OUT_DIR}/${NAME}-${GOOS}-${GOARCH}${suffix}"
 
-  echo "==> building ${out}"
-  CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" GOARM="${GOARM:-}" \
-    go build -trimpath -ldflags "$LDFLAGS" -o "$out" "${MODULE}/${CMD}"
+  for cmd in "${CMDS[@]}"; do
+    name="$(basename "$cmd")"
+    out="${OUT_DIR}/${name}-${GOOS}-${GOARCH}${suffix}"
+
+    echo "==> building ${out}"
+    CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" GOARM="${GOARM:-}" \
+      go build -trimpath -ldflags "$LDFLAGS" -o "$out" "${MODULE}/${cmd}"
+  done
 done
 
 echo "==> checksums"
 if command -v shasum >/dev/null 2>&1; then
-  (cd "$OUT_DIR" && shasum -a 256 ./"${NAME}"-* > checksums.txt)
+  (cd "$OUT_DIR" && shasum -a 256 ./* | grep -v checksums.txt > checksums.txt)
 else
-  (cd "$OUT_DIR" && sha256sum ./"${NAME}"-* > checksums.txt)
+  (cd "$OUT_DIR" && sha256sum ./* | grep -v checksums.txt > checksums.txt)
 fi
 
 echo "==> done: $(ls "$OUT_DIR" | wc -l) files in ${OUT_DIR}/"

@@ -8,6 +8,7 @@ A Go client library for theaula.dk, plus an MCP server that exposes it to LLM cl
 |------|---------|
 | module root (package `aula`) | Client library: HTTP connector, models, MeeBook client, HTML writers |
 | `cmd/goaula-mcp` | MCP server exposing the Aula API as Model Context Protocol tools over stdio |
+| `cmd/aula-login` | Interactive login helper that captures the Aula session via Chrome |
 
 ## Features
 
@@ -99,10 +100,41 @@ Custom providers implement `aula.SessionProvider`:
 
 ```go
 type SessionProvider interface {
-	SessionID() (string, error)    
-	SaveSessionID(id string) error 
+	SessionID() (string, error)
+	SaveSessionID(id string) error
 }
 ```
+
+### Login helper
+
+`cmd/aula-login` opens a visible Chrome window and polls for the `PHPSESSID` 
+cookie until you have completed the MitID login, then stores the session ID 
+in `~/.aula/session.txt`. Both MitID methods work — the flow is the same:
+
+- **MitID app** — scan the QR code in the browser window (or in the screenshot
+  file written by `--qr-out`) with the app on your phone.
+- **Physical MitID code reader** — ignore the QR and log in with username,
+  password and the reader; the tool just waits for you to finish.
+
+The login page is reloaded every few minutes while you are still on it so the
+QR never goes stale — a reload is never triggered once you have navigated into
+the MitID flow.
+
+**Note:** Some MitID logins yield a token that does not allow seeing sensitive 
+content. In this case an extra MitID approval is required and the 
+tool will redirect you to a 2-factor MitID login. 
+Skip with `--skip-stepup` in the unlikely case you need to skip this.
+
+```bash
+go build -o aula-login ./cmd/aula-login
+./aula-login                        # headed Chrome
+./aula-login --headless             # no window; QR screenshot written to file
+./aula-login --force                # re-login even if the stored session is valid
+./aula-login --browser-path /usr/bin/chromium --timeout 5m
+```
+
+Useful flags: `--headless`, `--browser-path`, `--session-file`, `--qr-out`,
+`--timeout` (default 10m), `--force`, `--v`.
 
 ## MCP server
 
