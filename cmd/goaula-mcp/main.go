@@ -1,4 +1,4 @@
-// Command aula-mcp is an MCP server exposing the Aula API (via the aula client library)
+// Command goaula-mcp is an MCP server exposing the Aula API (via the aula client library)
 // as read-only tools over stdio.
 //
 // The session token is assumed to be valid and is read from ~/.aula/session.txt,
@@ -17,7 +17,7 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/ripdajacker/aula-api-client-go"
+	"github.com/ripdajacker/goaula-mcp"
 )
 
 const serverInstructions = "Read-only access to the Danish Aula school portal (aula.dk). Start with " +

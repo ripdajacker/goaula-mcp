@@ -1,4 +1,4 @@
-module github.com/ripdajacker/aula-api-client-go
+module github.com/ripdajacker/goaula-mcp
 
 go 1.25.0
 

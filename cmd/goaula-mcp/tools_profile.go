@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/ripdajacker/aula-api-client-go"
+	"github.com/ripdajacker/goaula-mcp"
 )
 
 // Profile and context tools: who the logged-in user is, which children/institutions

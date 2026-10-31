@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/ripdajacker/aula-api-client-go"
+	"github.com/ripdajacker/goaula-mcp"
 )
 
 // aulaSession holds the aula.Client for the MCP server and serializes access to it

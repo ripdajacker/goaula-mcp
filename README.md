@@ -1,13 +1,13 @@
-# Aula API Client (Go)
+# goaula-mcp
 
-A Go client library for aula.dk.
+A Go client library for theaula.dk, plus an MCP server that exposes it to LLM clients.
 
 ## Project structure
 
 | Path | Purpose |
 |------|---------|
 | module root (package `aula`) | Client library: HTTP connector, models, MeeBook client, HTML writers |
-| `cmd/aula-mcp` | MCP server exposing the Aula API as Model Context Protocol tools over stdio |
+| `cmd/goaula-mcp` | MCP server exposing the Aula API as Model Context Protocol tools over stdio |
 
 ## Features
 
@@ -44,7 +44,7 @@ import (
 	"fmt"
 	"log"
 
-	aula "github.com/ripdajacker/aula-api-client-go"
+	aula "github.com/ripdajacker/goaula-mcp"
 )
 
 func main() {
@@ -106,7 +106,7 @@ type SessionProvider interface {
 
 ## MCP server
 
-`cmd/aula-mcp` is an [MCP](https://modelcontextprotocol.io) server that exposes Aula as read-only tools over stdio,
+`cmd/goaula-mcp` is an [MCP](https://modelcontextprotocol.io) server that exposes Aula as read-only tools over stdio,
 so LLM clients (Claude Desktop, OpenCode, etc.) can query posts, messages, threads, calendar, gallery, presence, and
 people. It uses the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
 
@@ -117,8 +117,8 @@ file and restart.
 ### Build and run
 
 ```bash
-go build -o aula-mcp ./cmd/aula-mcp
-./aula-mcp
+go build -o goaula-mcp ./cmd/goaula-mcp
+./goaula-mcp
 ```
 
 ### Tools
@@ -144,7 +144,7 @@ go build -o aula-mcp ./cmd/aula-mcp
 {
   "mcpServers": {
     "aula": {
-      "command": "/path/to/aula-mcp"
+      "command": "/path/to/goaula-mcp"
     }
   }
 }

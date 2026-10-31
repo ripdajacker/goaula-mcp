@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/ripdajacker/aula-api-client-go"
+	"github.com/ripdajacker/goaula-mcp"
 )
 
 // Gallery tool: photo albums with media.

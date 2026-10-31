@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/ripdajacker/aula-api-client-go"
+	"github.com/ripdajacker/goaula-mcp"
 )
 
 // Contacts tools: the groups ("Kontakter" lists) each child belongs to, and the contact

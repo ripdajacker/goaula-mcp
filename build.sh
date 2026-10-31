@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Cross-compiles the aula-mcp binary for Linux, macOS and Windows.
-# Output goes to dist/ as aula-mcp-<os>-<arch>[.exe], plus SHA256 checksums.
+# Cross-compiles the goaula-mcp binary for Linux, macOS and Windows.
+# Output goes to dist/ as goaula-mcp-<os>-<arch>[.exe], plus SHA256 checksums.
 #
 # Usage:
 #   ./build.sh                # build all platforms
@@ -11,9 +11,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-MODULE="github.com/ripdajacker/aula-api-client-go"
-CMD="cmd/aula-mcp"
-NAME="aula-mcp"
+MODULE="github.com/ripdajacker/goaula-mcp"
+CMD="cmd/goaula-mcp"
+NAME="goaula-mcp"
 OUT_DIR="dist"
 VERSION="${VERSION:-dev}"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo none)"

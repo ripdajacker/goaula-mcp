@@ -9,7 +9,7 @@ import (
 	"strconv"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/ripdajacker/aula-api-client-go"
+	"github.com/ripdajacker/goaula-mcp"
 )
 
 func addTool[In any](server *mcp.Server, session *aulaSession, name, title, description, inputSchema string,

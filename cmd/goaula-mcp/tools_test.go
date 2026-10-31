@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ripdajacker/aula-api-client-go"
+	"github.com/ripdajacker/goaula-mcp"
 )
 
 // TestSessionNotReady verifies tool calls on a session that never logged in get an

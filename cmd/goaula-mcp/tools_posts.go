@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/ripdajacker/aula-api-client-go"
+	"github.com/ripdajacker/goaula-mcp"
 )
 
 // Post feed tool: list recent posts. (There is no single-post-by-ID endpoint on the
