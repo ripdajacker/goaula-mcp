@@ -75,7 +75,7 @@ func registerAuthTools(server *mcp.Server, session *aulaSession) {
 		case login.StatusAuthenticated:
 			clearFlow()
 			defer f.Close()
-			return finishLogin(session, snap.SessionID)
+			return finishLogin(session, snap.SessionID, snap.SteppedUp)
 		case login.StatusBrowserClosed:
 			clearFlow()
 			return fail("The authentication browser window was closed. Call aula_login to start a new authentication flow.")
@@ -115,7 +115,7 @@ func registerAuthTools(server *mcp.Server, session *aulaSession) {
 		case login.StatusAuthenticated:
 			clearFlow()
 			defer f.Close()
-			return finishLogin(session, snap.SessionID)
+			return finishLogin(session, snap.SessionID, snap.SteppedUp)
 		case login.StatusBrowserClosed:
 			clearFlow()
 			return fail("The authentication browser window was closed. Call aula_login to start a new authentication flow.")
@@ -154,8 +154,8 @@ func registerAuthTools(server *mcp.Server, session *aulaSession) {
 }
 
 // finishLogin saves a captured session ID and swaps the server's client over
-// to it.
-func finishLogin(session *aulaSession, sessionID string) (*mcp.CallToolResult, any, error) {
+// to it. steppedUp reports whether the token has the secure-login level.
+func finishLogin(session *aulaSession, sessionID string, steppedUp bool) (*mcp.CallToolResult, any, error) {
 	provider, ok := session.sessionProvider()
 	if !ok {
 		return nil, nil, errors.New("cannot determine the session provider for saving the captured session")
@@ -167,8 +167,15 @@ func finishLogin(session *aulaSession, sessionID string) (*mcp.CallToolResult, a
 		return textResult("Session captured and stored, but logging in with it failed: " +
 			err.Error() + ". The session may still be valid — call aula_session_status to check.")
 	}
-	slog.Info("Interactive login completed and client re-initialized")
-	return textResult("Authentication successful! Session captured, stored and verified. You can now use any Aula data tools.")
+	slog.Info("Interactive login completed and client re-initialized", "secureLogin", steppedUp)
+
+	if steppedUp {
+		return textResult("Authentication successful! Session captured, stored and verified " +
+			"(secure login level). You can now use any Aula data tools.")
+	}
+	return textResult("Authentication successful! Session captured, stored and verified, but at the basic " +
+		"login level — this session cannot see secure content. This is fine for most Aula data tools. " +
+		"If secure content is needed, call aula_login again and complete the extra MitID approval when prompted.")
 }
 
 // sessionProvider exposes the session provider (used by the login tools to

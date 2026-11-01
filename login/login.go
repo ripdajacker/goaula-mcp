@@ -40,7 +40,8 @@ const (
 	defaultSettle   = 10 * time.Second
 	defaultTimeout  = 10 * time.Minute
 
-	stepUpURL = "https://www.aula.dk/auth/stepup.php?stepupDone=true"
+	stepUpURL    = "https://www.aula.dk/auth/stepup.php?stepupDone=true"
+	stepUpWindow = 3 * time.Minute // how long to wait for the SAML step-up to complete
 
 	// apiV25 is the API base URL used by the step-up assertion. Like the
 	// client library's initial version detection, it starts at v25.
@@ -54,8 +55,11 @@ const (
 	// StatusWaiting means login is still in progress. QR is non-nil when a
 	// fresh QR code screenshot just became available.
 	StatusWaiting Status = iota
-	// StatusAuthenticated means login (including the step-up, unless
-	// disabled) completed and the session was captured.
+	// StatusAuthenticated means the session was captured. The SteppedUp
+	// field reports whether it carries the secure-login level; a basic
+	// level token is also reported as authenticated (the step-up is
+	// best-effort, since whether it can succeed depends on the user's
+	// MitID specifics).
 	StatusAuthenticated
 	// StatusBrowserClosed means the user closed the browser before
 	// completing the login.
@@ -66,6 +70,7 @@ const (
 type Snapshot struct {
 	Status    Status
 	SessionID string // set when Status == StatusAuthenticated
+	SteppedUp bool   // StatusAuthenticated: whether the session has the secure-login level
 	QR        []byte // PNG screenshot of a fresh QR code, if any
 	Err       error  // set when the flow failed unrecoverably
 }
@@ -252,10 +257,25 @@ func (s *Session) run(ctx context.Context) {
 	// Only save a token that has remained unchanged for settle: Aula
 	// rotates the PHPSESSID once during the secure-login step-up.
 	var (
-		lastToken   string
-		settleStart time.Time
-		steppedUp   bool
+		lastToken      string
+		settleStart    time.Time
+		steppedUp      bool
+		stepUpDeadline time.Time // non-zero while a step-up is in flight
 	)
+
+	// complete finishes the flow with the captured token, reporting whether
+	// it ended up carrying the secure-login level. A basic token is a valid
+	// outcome too — whether the step-up can succeed depends on the user's
+	// MitID specifics, so the flow must not hang waiting for it.
+	complete := func(token string) {
+		secure := sessionSteppedUp(token)
+		slog.Info("Session captured", "secureLogin", secure)
+		s.send(Snapshot{
+			Status:    StatusAuthenticated,
+			SessionID: token,
+			SteppedUp: secure,
+		})
+	}
 
 	for {
 		select {
@@ -298,25 +318,37 @@ func (s *Session) run(ctx context.Context) {
 				continue
 			}
 
-			// Only do the SAML step-up if the session isn't already
+			// Try the SAML step-up once if the session isn't already
 			// stepped up — whether a plain login yields a privileged
 			// token depends on the user's MitID specifics.
 			if !opts.SkipStepUp && !steppedUp {
 				steppedUp = true
 				if sessionSteppedUp(sess) {
-					slog.Info("Session already has the secure-login (step-up) level — skipping")
-				} else {
-					slog.Info("Initiating secure-login step-up — an extra MitID approval may be required in the browser.")
-					if err := chromedp.Do(flowCtx, chromedp.Navigate(stepUpURL)); err != nil {
-						s.send(Snapshot{Err: fmt.Errorf("initiating step-up: %w", err)})
-						return
-					}
-					lastToken = "" // restart the settle logic for the upgraded token
-					continue
+					slog.Info("Session already has the secure-login (step-up) level")
+					complete(sess)
+					return
 				}
+				slog.Info("Initiating secure-login step-up — an extra MitID approval may be required in the browser.")
+				if err := chromedp.Do(flowCtx, chromedp.Navigate(stepUpURL)); err != nil {
+					s.send(Snapshot{Err: fmt.Errorf("initiating step-up: %w", err)})
+					return
+				}
+				stepUpDeadline = time.Now().Add(stepUpWindow)
+				lastToken = "" // restart the settle logic for the upgraded token
+				continue
 			}
 
-			s.send(Snapshot{Status: StatusAuthenticated, SessionID: sess})
+			// The token settled. If a step-up is in flight, give it time to
+			// rotate the token — but complete with the basic token instead
+			// of hanging when the window lapses without a privileged token.
+			if !stepUpDeadline.IsZero() &&
+				time.Now().Before(stepUpDeadline) &&
+				!sessionSteppedUp(sess) {
+				slog.Debug("Waiting for the secure-login step-up to complete")
+				continue
+			}
+
+			complete(sess)
 			return
 		}
 
