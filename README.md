@@ -1,6 +1,6 @@
 # goaula-mcp
 
-A Go client library for theaula.dk, plus an MCP server that exposes it to LLM clients.
+A Go client library for aula.dk, plus an MCP server that exposes it to LLM clients.
 
 ## Project structure
 
