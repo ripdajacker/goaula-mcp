@@ -258,6 +258,7 @@ func (s *Session) run(ctx context.Context) {
 	// rotates the PHPSESSID once during the secure-login step-up.
 	var (
 		lastToken      string
+		lastKnown      string // most recent token seen in the session cookie
 		settleStart    time.Time
 		steppedUp      bool
 		stepUpDeadline time.Time // non-zero while a step-up is in flight
@@ -292,6 +293,19 @@ func (s *Session) run(ctx context.Context) {
 		case <-ticker.C:
 		}
 
+		// A step-up that was initiated but never landed must not hang the
+		// flow: the browser may sit on the UNI-Login broker, the step-up
+		// page or the plain front page — none of which look like a
+		// logged-in portal, so no settled token is observable there. Once
+		// the window lapses, complete with the token last seen in the
+		// session cookie: it is valid, just possibly not stepped up.
+		if !stepUpDeadline.IsZero() && !time.Now().Before(stepUpDeadline) && lastKnown != "" {
+			slog.Info("Secure-login step-up did not land, completing with the current session token",
+				"window", stepUpWindow)
+			complete(lastKnown)
+			return
+		}
+
 		sess, ok, err := checkForSession(flowCtx)
 		if err != nil {
 			// The page may be mid-navigation; retry on the next tick.
@@ -302,7 +316,14 @@ func (s *Session) run(ctx context.Context) {
 			slog.Debug("Poll failed, retrying", "error", err)
 			continue
 		}
+		if !ok && sess != "" && !stepUpDeadline.IsZero() {
+			// The browser picked up a token while sitting on a non-portal
+			// page — e.g. the rotated token after the step-up. Remember it
+			// so the fallback above completes with the freshest one.
+			lastKnown = sess
+		}
 		if ok {
+			lastKnown = sess
 			if sess != lastToken {
 				if lastToken == "" {
 					slog.Info("Session token captured, watching briefly for the secure-login rotation",
@@ -367,9 +388,12 @@ func (s *Session) run(ctx context.Context) {
 	}
 }
 
-// checkForSession polls the browser for the Aula PHPSESSID cookie combined with
-// a logged-in URL. It returns (sessionID, true) once the user has completed the
-// login, and ("", false) while still waiting.
+// checkForSession polls the browser for the Aula PHPSESSID cookie. It returns
+// (sessionID, false) while the user has not completed the login; the cookie
+// value itself is still reported (with ok=false) whenever it exists, because a
+// rotated token may sit in the browser while the page is not a portal URL —
+// e.g. mid or after the secure-login step-up. Only trust the token when ok is
+// true.
 func checkForSession(ctx context.Context) (string, bool, error) {
 	loc, err := chromedp.Run(ctx, chromedp.Location())
 	if err != nil {
@@ -387,10 +411,10 @@ func checkForSession(ctx context.Context) (string, bool, error) {
 			break
 		}
 	}
-	if sess == "" || !isLoggedIn(loc) {
+	if sess == "" {
 		return "", false, nil
 	}
-	return sess, true, nil
+	return sess, isLoggedIn(loc), nil
 }
 
 // screenshot takes a full-page screenshot of the current browser window (the
