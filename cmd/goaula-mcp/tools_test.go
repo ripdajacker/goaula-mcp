@@ -194,4 +194,16 @@ func TestDownloadGalleryMediaAlbum(t *testing.T) {
 	if err != nil || string(data) != "img-P101_ORIGINAL.jpg" {
 		t.Errorf("file content: %q err=%v", data, err)
 	}
+	// The metadata companion Markdown is written next to the media.
+	mdPath := filepath.Join(dir, "album-7.md")
+	md, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatalf("metadata markdown: %v", err)
+	}
+	if !strings.Contains(string(md), "- **Album ID:** 7") || !strings.Contains(string(md), "[101.jpg](101.jpg)") {
+		t.Errorf("unexpected markdown:\n%s", md)
+	}
+	if !strings.Contains(res, "Metadata: "+mdPath) {
+		t.Errorf("report missing metadata path: %s", res)
+	}
 }

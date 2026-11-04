@@ -118,6 +118,7 @@ func cmdGalleryDownload(args []string) int {
 	defer client.Close()
 
 	var paths []string
+	var metadataPath string
 	skipped := 0
 	save := func(mediaURL, path string) {
 		fpath, serr := saveMedia(client, mediaURL, path)
@@ -129,8 +130,9 @@ func cmdGalleryDownload(args []string) int {
 	}
 
 	if *albumID != 0 {
-		// Fresh URLs: the media is fetched right before downloading.
-		media, merr := client.MediaForAlbum(*albumID, *mediaLimit)
+		// Fresh URLs: the media is fetched right before downloading. The
+		// album is included for the metadata Markdown.
+		album, merr := client.AlbumWithMedia(*albumID, *mediaLimit)
 		if merr != nil {
 			failSession(merr)
 			return exitFail
@@ -140,13 +142,38 @@ func cmdGalleryDownload(args []string) int {
 			fmt.Fprintf(os.Stderr, "goaula: %v\n", derr)
 			return exitFail
 		}
-		for i := range media {
-			mediaURL := media[i].FullSizeURL()
+		var saved []aula.SavedGalleryFile
+		for i := range album.Media {
+			mediaURL := album.Media[i].FullSizeURL()
 			if mediaURL == "" {
 				skipped++
 				continue
 			}
-			save(mediaURL, filepath.Join(target, albumMediaName(mediaURL, media[i].ID)))
+			data, err := client.DownloadMedia(mediaURL)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "goaula: %v\n", err)
+				return exitFail
+			}
+			path, werr := writeMediaFile(target, albumMediaName(mediaURL, album.Media[i].ID), data)
+			if werr != nil {
+				fmt.Fprintf(os.Stderr, "goaula: %v\n", werr)
+				return exitFail
+			}
+			paths = append(paths, path)
+			saved = append(saved, aula.SavedGalleryFile{ID: album.Media[i].ID, Path: path})
+		}
+		// Metadata companion Markdown suffixed for the album.
+		if md := aula.GalleryAlbumMarkdown(album, saved); md != "" {
+			name := aula.SanitizeFilename(album.Title)
+			if name == "" {
+				name = fmt.Sprintf("album-%d", album.ID)
+			}
+			mdPath, merr := writeMediaFile(target, name+".md", []byte(md))
+			if merr != nil {
+				fmt.Fprintf(os.Stderr, "goaula: %v\n", merr)
+				return exitFail
+			}
+			metadataPath = mdPath
 		}
 	}
 	for _, u := range urls {
@@ -163,19 +190,38 @@ func cmdGalleryDownload(args []string) int {
 		save(u, p)
 	}
 
-	if len(paths) == 0 && skipped == 0 {
+	if len(paths) == 0 && skipped == 0 && metadataPath == "" {
 		fmt.Fprintln(os.Stderr, "goaula: nothing was downloaded (no media with a URL?)")
 		return exitFail
 	}
-	emit(*jsonOut, map[string]any{"saved": paths, "skippedNoUrl": skipped}, func(b *strings.Builder) {
+	emit(*jsonOut, map[string]any{"saved": paths, "skippedNoUrl": skipped, "metadata": metadataPath}, func(b *strings.Builder) {
 		for _, p := range paths {
 			fmt.Fprintln(b, p)
+		}
+		if metadataPath != "" {
+			fmt.Fprintln(b, metadataPath)
 		}
 		if skipped > 0 {
 			fmt.Fprintf(b, "(skipped %d media without a URL)\n", skipped)
 		}
 	})
 	return exitOK
+}
+
+// uniquePath returns path, or the first path with a "-N" suffix before the
+// extension that does not exist yet.
+func uniquePath(path string) string {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return path
+	}
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	for i := 1; ; i++ {
+		candidate := fmt.Sprintf("%s-%d%s", base, i, ext)
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
+	}
 }
 
 // resolveMediaDir resolves the effective download directory, falling back to
@@ -213,16 +259,16 @@ func saveMedia(client *aula.Client, mediaURL, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	return writeMediaFile(filepath.Dir(path), filepath.Base(path), data)
+}
+
+// writeMediaFile writes bytes to dir/name, creating the directory if needed
+// and never overwriting an existing file (a "-<n>" suffix is added instead).
+func writeMediaFile(dir, name string, data []byte) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	for i := 1; ; i++ {
-		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
-			break
-		}
-		ext := filepath.Ext(path)
-		path = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(path, ext), i, ext)
-	}
+	path := uniquePath(filepath.Join(dir, name))
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", err
 	}

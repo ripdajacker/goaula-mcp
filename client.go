@@ -851,6 +851,17 @@ func institutionProfileQueryString(ids []int64) string {
 // albumID must identify a real album: the dynamically generated "my child"
 // album (id 0 or -1) only exists through GalleryAlbumMedia.
 func (c *Client) MediaForAlbum(albumID int64, mediaLimit int) ([]AlbumMedia, error) {
+	album, err := c.AlbumWithMedia(albumID, mediaLimit)
+	if err != nil {
+		return nil, err
+	}
+	return album.Media, nil
+}
+
+// AlbumWithMedia fetches one album together with its media, including fresh
+// signed URLs. albumID must identify a real album: the dynamically generated
+// "my child" album (id 0 or -1) only exists through GalleryAlbumMedia.
+func (c *Client) AlbumWithMedia(albumID int64, mediaLimit int) (*GalleryAlbum, error) {
 	if mediaLimit <= 0 {
 		mediaLimit = 30
 	}
@@ -866,7 +877,15 @@ func (c *Client) MediaForAlbum(albumID int64, mediaLimit int) ([]AlbumMedia, err
 	if err := unmarshalJSON(data, &mediaWrapper); err != nil {
 		return nil, fmt.Errorf("failed to parse album media: %w", err)
 	}
-	return mediaWrapper.Results, nil
+	album := mediaWrapper.Album
+	if album == nil {
+		album = &GalleryAlbum{ID: albumID}
+	}
+	if album.ID == 0 {
+		album.ID = albumID
+	}
+	album.Media = mediaWrapper.Results
+	return album, nil
 }
 
 // mediaHTTP downloads gallery media. It is deliberately separate from the

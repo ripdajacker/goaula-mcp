@@ -251,7 +251,9 @@ Conventions:
   commands exactly like the MCP server's `aula_set_context`; every command
   accepts `--child` / `--institution` overrides.
 - Gallery media URLs are signed and expire quickly; `gallery-download --album`
-  re-fetches fresh URLs right before downloading.
+  re-fetches fresh URLs right before downloading. Album downloads also write a
+  companion `<album-title>.md` with the album's metadata and a table of the
+  downloaded files.
 
 The `goaula-login` binary remains as a standalone alternative to `goaula login`
 (e.g. with `--ping`, see above).

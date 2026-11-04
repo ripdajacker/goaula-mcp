@@ -1210,6 +1210,7 @@ type AlbumMedia struct {
 	CurrentUserCanEditTags     bool          `json:"currentUserCanEditTags,omitempty"`
 	ConversionStatus           string        `json:"conversionStatus,omitempty"`
 	ID                         int64         `json:"id,omitempty"`
+	UploadedAt                 string        `json:"uploadedAt,omitempty"`
 	File                       *MediaFile    `json:"file,omitempty"`
 	Creator                    *MediaCreator `json:"creator,omitempty"`
 	ThumbnailURL               string        `json:"thumbnailUrl,omitempty"`

@@ -34,6 +34,7 @@ type downloadResult struct {
 	SkippedNoURL int              `json:"skippedNoUrl"`
 	TotalBytes   int64            `json:"totalBytes"`
 	Directory    string           `json:"directory,omitempty"`
+	MetadataPath string           `json:"metadataPath,omitempty"`
 }
 
 func registerGalleryTools(server *mcp.Server, session *aulaSession, count func()) {
@@ -85,7 +86,8 @@ func registerGalleryTools(server *mcp.Server, session *aulaSession, count func()
 		Name:  "aula_gallery_download",
 		Title: "Download gallery media",
 		Description: "Downloads gallery media bytes to files on the server machine. Pass a single media URL " +
-			"(from aula_gallery) or an album ID to download all its media. The media URLs are signed and " +
+			"(from aula_gallery) or an album ID to download all its media — album downloads also write a companion " +
+			"Markdown (.md) file with the album metadata and the downloaded files. The media URLs are signed and " +
 			"expire quickly — download shortly after listing them.",
 		Annotations: &mcp.ToolAnnotations{Title: "Download gallery media"},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args downloadArgs) (*mcp.CallToolResult, any, error) {
@@ -140,11 +142,11 @@ func downloadGalleryMedia(client *aula.Client, args downloadArgs) (string, error
 	}
 
 	// Album mode.
-	media, err := client.MediaForAlbum(*args.AlbumID, intArg(args.MediaLimit, 100))
+	album, err := client.AlbumWithMedia(*args.AlbumID, intArg(args.MediaLimit, 100))
 	if err != nil {
 		return "", err
 	}
-	if len(media) == 0 {
+	if len(album.Media) == 0 {
 		return fmt.Sprintf("Album %d contains no downloadable media.", *args.AlbumID), nil
 	}
 	dir := args.TargetPath
@@ -155,8 +157,9 @@ func downloadGalleryMedia(client *aula.Client, args downloadArgs) (string, error
 		}
 	}
 	out := downloadResult{Directory: dir}
-	for i := range media {
-		mediaURL := media[i].FullSizeURL()
+	var saved []aula.SavedGalleryFile
+	for i := range album.Media {
+		mediaURL := album.Media[i].FullSizeURL()
 		if mediaURL == "" {
 			out.SkippedNoURL++
 			continue
@@ -165,7 +168,7 @@ func downloadGalleryMedia(client *aula.Client, args downloadArgs) (string, error
 		if err != nil {
 			return "", err
 		}
-		path, err := writeMediaFile(dir, albumMediaFileName(mediaURL, media[i]), data)
+		path, err := writeMediaFile(dir, albumMediaFileName(mediaURL, album.Media[i]), data)
 		if err != nil {
 			return "", err
 		}
@@ -174,7 +177,21 @@ func downloadGalleryMedia(client *aula.Client, args downloadArgs) (string, error
 			return "", err
 		}
 		out.Saved = append(out.Saved, downloadedFile{Path: path, Bytes: info.Size()})
+		saved = append(saved, aula.SavedGalleryFile{ID: album.Media[i].ID, Path: path})
 		out.TotalBytes += info.Size()
+	}
+
+	// Metadata companion Markdown.
+	if md := aula.GalleryAlbumMarkdown(album, saved); md != "" {
+		name := aula.SanitizeFilename(album.Title)
+		if name == "" {
+			name = fmt.Sprintf("album-%d", album.ID)
+		}
+		mdPath, err := writeMediaFile(dir, name+".md", []byte(md))
+		if err != nil {
+			return "", err
+		}
+		out.MetadataPath = mdPath
 	}
 	return reportDownloads(out), nil
 }
@@ -189,6 +206,9 @@ func reportDownloads(out downloadResult) string {
 	b.WriteString(":")
 	for _, f := range out.Saved {
 		fmt.Fprintf(&b, "\n%s (%d bytes)", f.Path, f.Bytes)
+	}
+	if out.MetadataPath != "" {
+		fmt.Fprintf(&b, "\nMetadata: %s", out.MetadataPath)
 	}
 	return b.String()
 }
