@@ -157,6 +157,8 @@ people. It uses the official [MCP Go SDK](https://github.com/modelcontextprotoco
 The server reads the session token from `~/.aula/session.txt`, exactly like the client library. If the session has
 expired, the server still starts and every tool then returns an actionable error. The `aula_login` tool can then
 re-establish the session interactively (opening the shared login flow's browser) — no `goaula-login` binary required.
+Alternatively, refresh `~/.aula/session.txt` externally (e.g. by running `goaula-login`): the server re-reads the
+session token on every request and picks the new one up on the next tool call, no restart needed.
 
 ### Build and run
 
@@ -181,6 +183,7 @@ go build -o goaula-mcp ./cmd/goaula-mcp
 | `aula_thread` | A full message thread by ID |
 | `aula_calendar` | Calendar events in a date range, optionally by event type |
 | `aula_gallery` | Gallery albums with media URLs |
+| `aula_gallery_download` | Download gallery media to files (single URL or a whole album) |
 | `aula_daily_overview` | Daily presence overview per child |
 | `aula_contact_groups` | Groups (classes, SFO) each child belongs to |
 | `aula_contacts` | Contact list of a group (guardians' visible email/phone) |

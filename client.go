@@ -3,7 +3,9 @@ package aula
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
@@ -711,12 +713,7 @@ func parsePostTimestamp(timestamp string) (time.Time, error) {
 //	retrievePastDays: if set, get albums from the past N days
 //	childIDs:         child IDs to filter by (nil or empty for all children)
 func (c *Client) GalleryAlbumMedia(albumLimit, mediaLimit int, mostRecentAlbums, retrievePastDays *int, childIDs []int64) ([]GalleryAlbum, error) {
-	institutionProfileIDs := c.institutionProfileIDsForChildren(childIDs)
-	parts := make([]string, 0, len(institutionProfileIDs))
-	for _, id := range institutionProfileIDs {
-		parts = append(parts, "institutionProfileIds[]="+strconv.FormatInt(id, 10))
-	}
-	institutionQueryString := strings.Join(parts, "&")
+	institutionQueryString := institutionProfileQueryString(c.institutionProfileIDsForChildren(childIDs))
 
 	method := "gallery.getAlbums&index=0&limit=" + strconv.Itoa(albumLimit) +
 		"&sortOn=mediaCreatedAt&orderDirection=desc&filterBy=all&" + institutionQueryString
@@ -812,6 +809,70 @@ func (c *Client) GalleryAlbumMedia(albumLimit, mediaLimit int, mostRecentAlbums,
 	}
 
 	return returnAlbums, nil
+}
+
+// institutionProfileQueryString encodes institution profile IDs as the repeated
+// "institutionProfileIds[]=" query values Aula's gallery methods expect.
+func institutionProfileQueryString(ids []int64) string {
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, "institutionProfileIds[]="+strconv.FormatInt(id, 10))
+	}
+	return strings.Join(parts, "&")
+}
+
+// MediaForAlbum lists the media of one album, including fresh full-size URLs.
+// albumID must identify a real album: the dynamically generated "my child"
+// album (id 0 or -1) only exists through GalleryAlbumMedia.
+func (c *Client) MediaForAlbum(albumID int64, mediaLimit int) ([]AlbumMedia, error) {
+	if mediaLimit <= 0 {
+		mediaLimit = 30
+	}
+	institutionQueryString := institutionProfileQueryString(c.institutionProfileIDsForChildren(nil))
+	method := "gallery.getMedia&albumId=" + strconv.FormatInt(albumID, 10) +
+		"&index=0&limit=" + strconv.Itoa(mediaLimit) +
+		"&sortOn=uploadedAt&orderDirection=desc&filterBy=all&" + institutionQueryString
+	data, err := c.callJSONAPI(method, "get", nil)
+	if err != nil {
+		return nil, err
+	}
+	var mediaWrapper AlbumMediaResponse
+	if err := unmarshalJSON(data, &mediaWrapper); err != nil {
+		return nil, fmt.Errorf("failed to parse album media: %w", err)
+	}
+	return mediaWrapper.Results, nil
+}
+
+// mediaHTTP downloads gallery media. It is deliberately separate from the
+// connector's HTTP client: media URLs point at storage hosts (e.g. S3) that
+// can redirect (the connector's client never follows redirects) and carry
+// their own authorization in the URL, so no Aula cookies are needed.
+var mediaHTTP = &http.Client{Timeout: 5 * time.Minute}
+
+// DownloadMedia downloads the bytes behind a gallery media URL, e.g.
+// AlbumMedia.FullSizeURL or one of the thumbnail URLs. The URLs are signed
+// and expire quickly: when the storage host answers 403, re-fetch the album
+// media (GalleryAlbumMedia or MediaForAlbum) for a fresh URL.
+func (c *Client) DownloadMedia(mediaURL string) ([]byte, error) {
+	u, err := url.Parse(strings.TrimSpace(mediaURL))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, NewAPIError("invalid media URL: " + mediaURL)
+	}
+	resp, err := mediaHTTP.Get(u.String())
+	if err != nil {
+		return nil, NewAPIError("failed to download media: " + err.Error())
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return io.ReadAll(resp.Body)
+	case http.StatusForbidden, http.StatusNotFound, http.StatusGone:
+		return nil, NewAPIError(fmt.Sprintf(
+			"media URL rejected with HTTP %d — the signed URL has likely expired; re-fetch the album media for a fresh one",
+			resp.StatusCode))
+	default:
+		return nil, NewAPIError(fmt.Sprintf("failed to download media: HTTP %d", resp.StatusCode))
+	}
 }
 
 // ==================== MeeBook ====================
