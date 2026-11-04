@@ -612,10 +612,46 @@ func (m *Message) ImageAttachmentURLs() []string { return imageAttachmentURLs(m.
 // FileAttachmentURLs returns the URLs of the file attachments.
 func (m *Message) FileAttachmentURLs() []string { return fileAttachmentURLs(m.Attachments) }
 
-// ThreadEntityLink is a thread entity link DTO.
+// ThreadEntityLink is a thread entity link DTO. Aula serializes entityId as a
+// string in most responses but as an unquoted number in others (e.g. within
+// what messaging.getMessagesForThread returns), so unmarshaling accepts both.
 type ThreadEntityLink struct {
 	EntityID   string `json:"entityId,omitempty"`
 	ThreadType string `json:"threadType,omitempty"`
+}
+
+// UnmarshalJSON decodes the entity link DTO, accepting entityId as a string or
+// a number.
+func (l *ThreadEntityLink) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		EntityID   json.RawMessage `json:"entityId"`
+		ThreadType json.RawMessage `json:"threadType"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw.EntityID) > 0 {
+		var s string
+		err := json.Unmarshal(raw.EntityID, &s)
+		if err != nil {
+			// Aula sometimes returns the ID as an unquoted number.
+			var n json.Number
+			if nerr := json.Unmarshal(raw.EntityID, &n); nerr == nil {
+				s = n.String()
+				err = nil
+			}
+		}
+		if err != nil {
+			return err
+		}
+		l.EntityID = s
+	}
+	if len(raw.ThreadType) > 0 {
+		if err := json.Unmarshal(raw.ThreadType, &l.ThreadType); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // MessagesForThread is a thread with all its messages.

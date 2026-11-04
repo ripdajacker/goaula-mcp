@@ -25,6 +25,43 @@ func TestPagedResult(t *testing.T) {
 	}
 }
 
+// TestThreadEntityLinkUnmarshal verifies entityId accepts both the string and
+// the bare-number form Aula uses (a number previously failed thread parsing
+// with "cannot unmarshal number ... of type string").
+func TestThreadEntityLinkUnmarshal(t *testing.T) {
+	cases := []struct {
+		name       string
+		json       string
+		wantEntity string
+		wantType   string
+	}{
+		{"string entityId", `{"entityId": "173280408", "threadType": "MESSAGE"}`, "173280408", "MESSAGE"},
+		{"number entityId", `{"entityId": 173280408, "threadType": "MESSAGE"}`, "173280408", "MESSAGE"},
+		{"absent entityId", `{"threadType": "MESSAGE"}`, "", "MESSAGE"},
+		{"bare number entityId", `{"entityId": 173280408}`, "173280408", ""},
+	}
+	for _, c := range cases {
+		var link ThreadEntityLink
+		if err := json.Unmarshal([]byte(c.json), &link); err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if link.EntityID != c.wantEntity || link.ThreadType != c.wantType {
+			t.Errorf("%s: got %+v, want entityId=%q threadType=%q", c.name, link, c.wantEntity, c.wantType)
+		}
+	}
+
+	// And the whole thread envelope that aula_thread parses.
+	thread := `{"id": 1, "subject": "Hello", "threadEntityLinkDto": {"entityId": 173280408, "threadType": "MESSAGE"}, "messages": []}`
+	var msgThread MessagesForThread
+	if err := json.Unmarshal([]byte(thread), &msgThread); err != nil {
+		t.Fatalf("number entityId failed thread parse: %v", err)
+	}
+	if msgThread.ThreadEntityLinkDTO == nil || msgThread.ThreadEntityLinkDTO.EntityID != "173280408" {
+		t.Errorf("unexpected entity link: %+v", msgThread.ThreadEntityLinkDTO)
+	}
+}
+
 func TestPostUnmarshal(t *testing.T) {
 	body := `{
 		"id": 123,
