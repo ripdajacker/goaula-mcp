@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 MODULE="github.com/ripdajacker/goaula-mcp"
-CMDS=("cmd/goaula-mcp" "cmd/goaula-login")
+CMDS=("cmd/goaula-mcp" "cmd/goaula-login" "cmd/goaula")
 OUT_DIR="dist"
 VERSION="${VERSION:-dev}"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo none)"

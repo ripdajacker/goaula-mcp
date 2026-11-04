@@ -211,6 +211,51 @@ After 3 consecutive ping failures the session is marked expired and tools
 return the "refresh the session" error until the process is restarted with a
 fresh session file.
 
+## CLI
+
+`cmd/goaula` is a scripting-friendly CLI covering everything the MCP server can
+do: interactive login (MitID browser flow, shared with the MCP server), session
+status/keep-alive ping, context selection, and one command per data tool —
+posts, messages, threads, contacts, calendar, daily overview, people search, and
+gallery listing **and downloads**.
+
+```bash
+go build -o goaula ./cmd/goaula
+
+goaula login                                # interactive MitID login (≈ goaula-login)
+goaula session status                       # exit 0 when authenticated
+goaula session ping --watch --interval 15m  # keep-alive for cron/scripts
+goaula whoami                               # profile, children, institutions (IDs)
+goaula children                             # just the children with their IDs
+
+goaula set-context --child 6017070          # persist the default child
+goaula posts --days 7 --json | jq '.[].title'
+goaula messages --days 3 --limit 50
+goaula thread 173280408
+goaula contacts 1592320                     # group ID from: goaula contact-groups
+goaula calendar --type lesson --past 0 --future 14
+goaula daily-overview                       # child from set-context or --child N
+
+goaula gallery                              # albums and media with URLs
+goaula gallery-download --album 3756587 --dir ~/pics/aula
+goaula gallery-download --url "https://media-prod.aula.dk/.../img.jpeg?..." --out pic.jpeg
+```
+
+Conventions:
+
+- Human-readable output by default; pass `--json` (before or after the command)
+  for stable, pipe-friendly JSON on stdout.
+- Errors go to stderr; a failed (expired) session prints an actionable message
+  and exits 1 — usage errors exit 2.
+- Context (`~/.aula/context.json`, set by `set-context`) scopes the data
+  commands exactly like the MCP server's `aula_set_context`; every command
+  accepts `--child` / `--institution` overrides.
+- Gallery media URLs are signed and expire quickly; `gallery-download --album`
+  re-fetches fresh URLs right before downloading.
+
+The `goaula-login` binary remains as a standalone alternative to `goaula login`
+(e.g. with `--ping`, see above).
+
 ## License
 
 MIT

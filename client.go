@@ -712,9 +712,62 @@ func parsePostTimestamp(timestamp string) (time.Time, error) {
 //	mostRecentAlbums: if set, get the N most recent albums
 //	retrievePastDays: if set, get albums from the past N days
 //	childIDs:         child IDs to filter by (nil or empty for all children)
+//
+// Only the album listing runs; the media of each album is fetched separately
+// (and per album) — use Albums for a light listing without media.
 func (c *Client) GalleryAlbumMedia(albumLimit, mediaLimit int, mostRecentAlbums, retrievePastDays *int, childIDs []int64) ([]GalleryAlbum, error) {
+	albums, err := c.Albums(albumLimit, mostRecentAlbums, retrievePastDays, childIDs)
+	if err != nil {
+		return nil, err
+	}
+	if mediaLimit <= 0 {
+		mediaLimit = 30
+	}
 	institutionQueryString := institutionProfileQueryString(c.institutionProfileIDsForChildren(childIDs))
 
+	// Fetch media for each album
+	for i := range albums {
+		var albumScopeSignifier string
+		if albums[i].IsDefaultMyChildAlbum {
+			albumScopeSignifier = "userSpecificAlbum=true"
+		} else {
+			albumScopeSignifier = "albumId=" + strconv.FormatInt(albums[i].ID, 10)
+		}
+
+		mediaMethod := "gallery.getMedia&" + albumScopeSignifier + "&index=0&limit=" + strconv.Itoa(mediaLimit) +
+			"&sortOn=uploadedAt&orderDirection=desc&filterBy=all&" + institutionQueryString
+		mediaData, err := c.callJSONAPI(mediaMethod, "get", nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var mediaWrapper AlbumMediaResponse
+		if err := unmarshalJSON(mediaData, &mediaWrapper); err != nil {
+			slog.Warn("Failed to parse album media", "albumId", albums[i].ID, "error", err)
+			continue
+		}
+		if mediaWrapper.Results != nil {
+			albums[i].Media = mediaWrapper.Results
+		}
+	}
+
+	return albums, nil
+}
+
+// Albums lists the gallery albums for the current profile without fetching any
+// media — one API call. Same parameters and ordering as GalleryAlbumMedia:
+//
+//	albumLimit:       max number of albums (default 12)
+//	retrievePastDays: if set, get albums from the past N days
+//	childIDs:         child IDs to filter by (nil or empty for all children)
+//
+//	mostRecentAlbums: if set, keep only the N most recent albums (applies when
+//	retrievePastDays is not set)
+func (c *Client) Albums(albumLimit int, mostRecentAlbums, retrievePastDays *int, childIDs []int64) ([]GalleryAlbum, error) {
+	if albumLimit <= 0 {
+		albumLimit = 12
+	}
+	institutionQueryString := institutionProfileQueryString(c.institutionProfileIDsForChildren(childIDs))
 	method := "gallery.getAlbums&index=0&limit=" + strconv.Itoa(albumLimit) +
 		"&sortOn=mediaCreatedAt&orderDirection=desc&filterBy=all&" + institutionQueryString
 	data, err := c.callJSONAPI(method, "get", nil)
@@ -742,72 +795,45 @@ func (c *Client) GalleryAlbumMedia(albumLimit, mediaLimit int, mostRecentAlbums,
 		return strings.Compare(b.CreationDate, a.CreationDate)
 	})
 
-	var returnAlbums []GalleryAlbum
-
 	if retrievePastDays != nil {
 		end := time.Now()
 		start := end.AddDate(0, 0, -*retrievePastDays)
 
+		var recent []GalleryAlbum
 		for _, album := range albums {
 			if album.CreationDate == "" {
 				continue
 			}
 			albumDate, err := time.Parse(time.RFC3339Nano, album.CreationDate)
 			if err != nil {
-				returnAlbums = append(returnAlbums, album)
+				recent = append(recent, album)
 				continue
 			}
 			if !albumDate.Before(start) && !albumDate.After(end) {
-				returnAlbums = append(returnAlbums, album)
+				recent = append(recent, album)
 			}
 		}
-	} else {
-		// Not the my child album
-		var nonDefaultAlbums []GalleryAlbum
-		for _, album := range albums {
-			if !album.IsDefaultMyChildAlbum {
-				nonDefaultAlbums = append(nonDefaultAlbums, album)
-			}
-		}
-		// Get the most recent
-		if mostRecentAlbums != nil && len(nonDefaultAlbums) > *mostRecentAlbums {
-			nonDefaultAlbums = nonDefaultAlbums[:*mostRecentAlbums]
-		}
-		returnAlbums = append(returnAlbums, nonDefaultAlbums...)
-		// Add the default my child album back
-		for _, album := range albums {
-			if album.IsDefaultMyChildAlbum {
-				returnAlbums = append(returnAlbums, album)
-			}
-		}
+		return recent, nil
 	}
 
-	// Fetch media for each album
-	for i := range returnAlbums {
-		var albumScopeSignifier string
-		if returnAlbums[i].IsDefaultMyChildAlbum {
-			albumScopeSignifier = "userSpecificAlbum=true"
-		} else {
-			albumScopeSignifier = "albumId=" + strconv.FormatInt(returnAlbums[i].ID, 10)
-		}
-
-		mediaMethod := "gallery.getMedia&" + albumScopeSignifier + "&index=0&limit=" + strconv.Itoa(mediaLimit) +
-			"&sortOn=uploadedAt&orderDirection=desc&filterBy=all&" + institutionQueryString
-		mediaData, err := c.callJSONAPI(mediaMethod, "get", nil)
-		if err != nil {
-			return nil, err
-		}
-
-		var mediaWrapper AlbumMediaResponse
-		if err := unmarshalJSON(mediaData, &mediaWrapper); err != nil {
-			slog.Warn("Failed to parse album media", "albumId", returnAlbums[i].ID, "error", err)
-			continue
-		}
-		if mediaWrapper.Results != nil {
-			returnAlbums[i].Media = mediaWrapper.Results
+	// Not the my child album first...
+	var nonDefaultAlbums []GalleryAlbum
+	for _, album := range albums {
+		if !album.IsDefaultMyChildAlbum {
+			nonDefaultAlbums = append(nonDefaultAlbums, album)
 		}
 	}
-
+	// Get the most recent
+	if mostRecentAlbums != nil && len(nonDefaultAlbums) > *mostRecentAlbums {
+		nonDefaultAlbums = nonDefaultAlbums[:*mostRecentAlbums]
+	}
+	returnAlbums := append([]GalleryAlbum{}, nonDefaultAlbums...)
+	// ...then the default my child album(s) back at the end
+	for _, album := range albums {
+		if album.IsDefaultMyChildAlbum {
+			returnAlbums = append(returnAlbums, album)
+		}
+	}
 	return returnAlbums, nil
 }
 

@@ -7,6 +7,47 @@ import (
 	"testing"
 )
 
+// TestAlbums verifies the album listing makes one getAlbums call (and no
+// per-album getMedia calls), with the media fields left empty.
+func TestAlbums(t *testing.T) {
+	var mediaCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "gallery.getMedia") {
+			mediaCalls++
+		}
+		if strings.Contains(r.URL.RawQuery, "profiles.getProfilesByLogin") {
+			w.Write([]byte(`{"data": {}, "version": 22}`))
+			return
+		}
+		w.Write([]byte(`{"data": [
+			{"id": 7, "title": "Sommerfest", "creationDate": "2025-07-01T10:00:00+02:00"},
+			{"id": 8, "title": "Skolestart", "creationDate": "2025-08-01T10:00:00+02:00"}
+		], "version": 22}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(&Config{Session: &StaticSessionProvider{}, APIURL: server.URL + "/api/"})
+	if err := client.Login(); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	albums, err := client.Albums(10, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mediaCalls != 0 {
+		t.Errorf("gallery.getMedia called %d times; Albums must not fetch media", mediaCalls)
+	}
+	if len(albums) != 2 || albums[0].ID != 8 || albums[1].ID != 7 {
+		t.Errorf("unexpected albums: %+v", albums)
+	}
+	for i := range albums {
+		if len(albums[i].Media) != 0 {
+			t.Errorf("album %d should have no media", albums[i].ID)
+		}
+	}
+}
+
 // TestDownloadMedia verifies the media HTTP download follows redirects and
 // maps expired signed URLs to a "re-fetch" hint.
 func TestDownloadMedia(t *testing.T) {
