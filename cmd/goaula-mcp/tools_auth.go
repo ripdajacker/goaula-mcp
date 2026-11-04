@@ -144,7 +144,11 @@ func registerAuthTools(server *mcp.Server, session *aulaSession) {
 		Annotations: &mcp.ToolAnnotations{Title: "Aula session status", ReadOnlyHint: true},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 		if !session.isReady() {
-			return textResult(`{"authenticated": false, "reason": "No valid session. Call aula_login."}`)
+			// The session may have been refreshed externally (goaula-login)
+			// since the last failed login — try the current session file.
+			if err := session.relogin(); err != nil {
+				return textResult(`{"authenticated": false, "reason": "No valid session. Call aula_login."}`)
+			}
 		}
 		if err := session.ping(); err != nil {
 			return textResult(`{"authenticated": false, "reason": "Session expired (ping failed). Call aula_login."}`)

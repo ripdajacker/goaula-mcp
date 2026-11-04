@@ -249,6 +249,67 @@ func TestCallAulaAPI404(t *testing.T) {
 	}
 }
 
+// TestSessionIDRefreshedExternally verifies a session ID that changes in the
+// provider between requests (e.g. the session file was rewritten by another
+// goaula-login run) is adopted on the next request, while an unchanged
+// provider value keeps an Aula-rotated cookie that the provider failed to
+// persist.
+func TestSessionIDRefreshedExternally(t *testing.T) {
+	var (
+		forceRotation bool
+		gotSession    string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, kv := range strings.Split(r.Header.Get("Cookie"), ";") {
+			if kv = strings.TrimSpace(kv); strings.HasPrefix(kv, "PHPSESSID=") {
+				gotSession = strings.TrimPrefix(kv, "PHPSESSID=")
+			}
+		}
+		if forceRotation {
+			w.Header().Set("Set-Cookie", "PHPSESSID=rotated-session; Path=/; HttpOnly")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data": {}, "version": 22}`))
+	}))
+	defer server.Close()
+
+	session := &memorySession{id: "old-session"}
+	conn := newConnector(session)
+	if _, err := conn.initializeAPIUse(server.URL + "/api/"); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(server.URL)
+	if got := conn.cookies.cookieValue(u.Hostname(), "PHPSESSID"); got != "old-session" {
+		t.Errorf("initial stored PHPSESSID = %q, want old-session", got)
+	}
+
+	// The session file is rewritten externally between requests.
+	session.id = "fresh-session"
+	if _, err := conn.callAulaAPI("posts.getAllPosts", "get", nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotSession != "fresh-session" {
+		t.Errorf("sent PHPSESSID = %q, want fresh-session", gotSession)
+	}
+
+	// Aula rotates the ID but the provider fails to persist it: the unchanged
+	// provider value must keep the rotated cookie for the next request.
+	forceRotation = true
+	if _, err := conn.callAulaAPI("posts.getAllPosts", "get", nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotSession != "fresh-session" {
+		t.Errorf("sent PHPSESSID = %q, want fresh-session", gotSession)
+	}
+	forceRotation = false
+	if _, err := conn.callAulaAPI("posts.getAllPosts", "get", nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotSession != "rotated-session" {
+		t.Errorf("sent PHPSESSID = %q, want rotated-session", gotSession)
+	}
+}
+
 // TestCallAulaAPIPost verifies POST bodies are sent as JSON.
 func TestCallAulaAPIPost(t *testing.T) {
 	var gotBody []byte

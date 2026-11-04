@@ -19,10 +19,11 @@ const maxPingFailures = aula.MaxPingFailures
 // aulaSession holds the aula.Client for the MCP server and serializes access to it
 // (the client and its cookie state are not thread-safe).
 //
-// The session token is assumed valid, exactly like the underlying client: the
-// first login reads it via the SessionProvider. If login fails, the MCP server
-// still starts — tools then return an actionable error instead of the whole
-// server refusing to boot.
+// The session token is read (and re-validated on every request) via the
+// SessionProvider (~/.aula/session.txt). If the first login fails, the MCP
+// server still starts — tools attempt a fresh login with the current session
+// file on the next call, so an externally refreshed session is picked up
+// without a restart.
 type aulaSession struct {
 	config *aula.Config
 	client *aula.Client
@@ -60,13 +61,19 @@ func (s *aulaSession) isReady() bool {
 	return s.ready.Load()
 }
 
-// call runs a unit of work against the client, serialized through a lock. Returns an
-// aula.InvalidSessionError when the server never managed to log in.
+// call runs a unit of work against the client, serialized through a lock. When
+// the session is not ready — e.g. the session file (or its content) appeared
+// after a failed startup login, or the ping loop marked the session expired —
+// one full login attempt is made with the current session file first. The
+// connector re-validates the session token from the file on every request, so
+// an externally refreshed session is picked up here without a restart.
 func (s *aulaSession) call(fn func(client *aula.Client) (any, error)) (any, error) {
 	if !s.ready.Load() {
-		return nil, aula.NewInvalidSessionError("The Aula session is invalid or expired. Run the aula_login " +
-			"tool to log in interactively, refresh ~/.aula/session.txt (e.g. by running goaula-login), and " +
-			"try again.")
+		if err := s.relogin(); err != nil {
+			return nil, aula.NewInvalidSessionError("The Aula session is invalid or expired. Run the aula_login " +
+				"tool to log in interactively, refresh ~/.aula/session.txt (e.g. by running goaula-login), and " +
+				"try again. Last login attempt: " + err.Error())
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,9 +108,9 @@ func (s *aulaSession) ping() error {
 
 // startPing pings the Aula API on a ticker to keep the session token alive
 // (same pattern as the TS aula-mcp-server). After MaxPingFailures consecutive
-// failures the session is marked expired: tools return the actionable
-// "refresh the session" error until the process is restarted with a valid
-// session file.
+// failures the session is marked expired: the ping loop stops counting and
+// tools attempt a fresh login with the current session file on their next
+// call, so a refreshed session file is picked up without a restart.
 func (s *aulaSession) startPing(interval time.Duration) {
 	if s.pingStop != nil {
 		return // already running

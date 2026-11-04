@@ -37,6 +37,7 @@ type connector struct {
 	versionedAPIURL  string
 
 	lastUsedSessionID string
+	providerSessionID string // last session ID seen from the provider
 }
 
 func newConnector(session SessionProvider) *connector {
@@ -233,14 +234,24 @@ func (c *connector) makeRequest(reqURL, method string, jsonBody []byte) (*http.R
 		req.Header.Set(csrfpTokenName, c.cookies.cookieValue(host, csrfpTokenName))
 	}
 
-	// Session ID
-	if !c.cookies.hasCookie(host, "PHPSESSID") {
-		sessionID, serr := c.session.SessionID()
-		if serr != nil {
-			slog.Warn("Failed to read session ID", "error", serr)
+	// Session ID: consult the provider on every request — the read is cheap
+	// (a small file or an in-memory provider). A provider value that differs
+	// from the previous one is adopted immediately, so an externally
+	// refreshed session file (e.g. another goaula-login run) is picked up on
+	// the next request without a restart. An unchanged value keeps the
+	// current cookie, which may be a fresher, Aula-rotated ID that the
+	// rotation handler stored and the provider failed to persist.
+	sessionID, serr := c.session.SessionID()
+	if serr != nil {
+		slog.Warn("Failed to read session ID", "error", serr)
+	} else if sessionID != "" {
+		if sessionID != c.providerSessionID {
+			slog.Debug("Adopting session ID from the session provider",
+				"id", truncate(sessionID, 10), "first", c.providerSessionID == "")
+			c.cookies.addCookieValue(host, "PHPSESSID", sessionID)
 		}
-		c.lastUsedSessionID = sessionID
-		c.cookies.addCookieValue(host, "PHPSESSID", sessionID)
+		c.providerSessionID = sessionID
+		c.lastUsedSessionID = c.cookies.cookieValue(host, "PHPSESSID")
 	}
 
 	// Profile change counter for www.aula.dk

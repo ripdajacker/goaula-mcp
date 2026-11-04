@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,9 +10,11 @@ import (
 )
 
 // TestSessionNotReady verifies tool calls on a session that never logged in get an
-// actionable InvalidSessionError.
+// actionable InvalidSessionError (after the one relogin attempt against the
+// configured — here empty — session file).
 func TestSessionNotReady(t *testing.T) {
-	session := newAulaSession(&aula.Config{})
+	provider := &aula.FileSessionProvider{Path: filepath.Join(t.TempDir(), "session.txt")}
+	session := newAulaSession(&aula.Config{Session: provider})
 
 	if session.isReady() {
 		t.Fatal("session should not be ready before login")
