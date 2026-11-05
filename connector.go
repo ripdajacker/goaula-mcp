@@ -132,20 +132,23 @@ func (c *connector) initializeAPIUse(baseAPIURL string) (string, error) {
 func (c *connector) callAulaAPI(aulaMethod, httpMethod string, postData any) (json.RawMessage, error) {
 	reqURL := c.versionedAPIURL + "?method=" + aulaMethod
 
-	var resp *http.Response
-	var err error
-	if strings.EqualFold(httpMethod, "get") {
-		resp, err = c.makeRequest(reqURL, http.MethodGet, nil)
-	} else {
-		var jsonBody []byte
-		if postData != nil {
-			jsonBody, err = MarshalJSON(postData)
-			if err != nil {
-				return nil, NewAPIError("Failed to serialize request body: " + err.Error())
-			}
+	var jsonBody []byte
+	if strings.EqualFold(httpMethod, "post") && postData != nil {
+		var err error
+		jsonBody, err = MarshalJSON(postData)
+		if err != nil {
+			return nil, NewAPIError("Failed to serialize request body: " + err.Error())
 		}
-		resp, err = c.makeRequest(reqURL, http.MethodPost, jsonBody)
 	}
+
+	attempt := func() (*http.Response, error) {
+		if strings.EqualFold(httpMethod, "post") {
+			return c.makeRequest(reqURL, http.MethodPost, jsonBody)
+		}
+		return c.makeRequest(reqURL, http.MethodGet, nil)
+	}
+
+	resp, err := attempt()
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +164,37 @@ func (c *connector) callAulaAPI(aulaMethod, httpMethod string, postData any) (js
 	// token, which Aula rejects with a 403 + HTML error page.
 	c.processResponseCookies(resp)
 
-	status := resp.StatusCode
 	respBody, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	// A denied call may be a stale CSRF state rather than a real refusal: Aula
+	// answers those with HTTP 403 ("Invalid CSRF Token" HTML page or the bare
+	// JSON status code 403). A cheap authenticated GET re-establishes a fresh
+	// CSRF token cookie, and the exact request is retried once. Callers keep
+	// seeing the denial error when the retry is rejected as well.
+	if resp.StatusCode == http.StatusForbidden && deniedResponseBody(respBody) {
+		slog.Debug("403 from Aula — refreshing the CSRF state and retrying once", "method", aulaMethod)
+		if refreshErr := c.refreshCSRFToken(); refreshErr != nil {
+			slog.Debug("CSRF refresh failed, reporting the denial", "error", refreshErr)
+		} else {
+			resp2, err2 := attempt()
+			if err2 == nil {
+				b2, bErr := io.ReadAll(resp2.Body)
+				resp2.Body.Close()
+				// Process the retry's cookies even on failure, so the state
+				// stays fresh for the calls after this one.
+				c.handlePHPSESSIDRotation(resp2)
+				c.processResponseCookies(resp2)
+				if bErr == nil {
+					resp, respBody, readErr = resp2, b2, nil
+				}
+			} else {
+				slog.Debug("CSRF retry failed", "error", err2)
+			}
+		}
+	}
+
+	status := resp.StatusCode
 
 	switch {
 	case status == http.StatusForbidden:
@@ -189,7 +221,7 @@ func (c *connector) callAulaAPI(aulaMethod, httpMethod string, postData any) (js
 				// The token may still be valid (unlike the invalid-session
 				// code 448): a retry often suffices.
 				return nil, &AccessDeniedError{APIError{
-					Message:        fmt.Sprintf("Access denied while calling API method '%s' (Aula code 403, empty message): the call was rejected, but the session may still be valid — retry, and re-login (secure login step-up) if it keeps failing.", aulaMethod),
+					Message:        fmt.Sprintf("Access denied while calling API method '%s' (Aula code 403, empty message) even after a CSRF refresh and one automatic retry: retry later, and re-login (secure login step-up) if it keeps failing.", aulaMethod),
 					HTTPStatus:     status,
 					AulaStatusCode: parsed.Status.Code,
 					AulaSubCode:    parsed.Status.SubCode,
@@ -221,6 +253,43 @@ func (c *connector) callAulaAPI(aulaMethod, httpMethod string, postData any) (js
 		return nil, NewAPIError("API connection failed: " + readErr.Error())
 	}
 	return json.RawMessage(respBody), nil
+}
+
+// deniedResponseBody reports whether a 403 response body looks like a
+// recoverable CSRF/denial state: the "Invalid CSRF Token" HTML error page or
+// the bare JSON status envelope with Aula code 403 and an empty message.
+func deniedResponseBody(body []byte) bool {
+	if bytes.Contains(bytes.ToLower(body), []byte("invalid csrf token")) {
+		return true
+	}
+	var status struct {
+		Status struct {
+			Code *int `json:"code"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(body, &status); err != nil {
+		return false
+	}
+	return status.Status.Code != nil && *status.Status.Code == aulaCodeAccessDenied
+}
+
+// refreshCSRFToken re-establishes a fresh CSRF token cookie with a cheap
+// authenticated GET. Aula's Csrfp-Token can go stale ("Do not cache this
+// token for reuse"), which answers calls with HTTP 403 / "Invalid CSRF Token".
+func (c *connector) refreshCSRFToken() error {
+	resp, err := c.makeRequest(c.versionedAPIURL+"?method=profiles.getProfilesByLogin", http.MethodGet, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return err
+	}
+	// Handle PHPSESSID rotation (must run before the cookie merge below, since
+	// it compares against the current cookie value)
+	c.handlePHPSESSIDRotation(resp)
+	c.processResponseCookies(resp)
+	return nil
 }
 
 // makeRequest makes an HTTP request with cookie injection.

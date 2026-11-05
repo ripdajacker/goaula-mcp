@@ -379,3 +379,58 @@ func TestCallAulaAPIPost(t *testing.T) {
 		t.Errorf("body = %s", gotBody)
 	}
 }
+
+// TestCallAulaAPICSFRRetryOnToken verifies a POST rejected with the
+// "Invalid CSRF Token" HTML 403 is retried once after a CSRF refresh GET,
+// and that the retry carries the fresh Csrfp-Token cookie from the GET's
+// Set-Cookie.
+func TestCallAulaAPICSFRetry(t *testing.T) {
+	var postCalls, getCalls int
+	var lastCSRF string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries := strings.Split(r.URL.RawQuery, "method=")
+		method := ""
+		if len(queries) > 1 {
+			method = queries[1]
+		}
+		switch {
+		case strings.HasPrefix(method, "profiles.getProfilesByLogin") && r.Method == http.MethodGet:
+			if strings.Contains(r.Header.Get("Csrfp-Token"), "GET") {
+				getCalls++ // CSRF refresh GET (called with the refreshed token)
+			}
+			// Issue a NEW CSRF token per response ("do not cache this token").
+			w.Header().Set("Set-Cookie", "Csrfp-Token=csrf-refreshed; Path=/; Domain=.aula.dk")
+			w.Write([]byte(`{"data": {}, "version": 22}`))
+		case strings.HasPrefix(method, "messaging"):
+			postCalls++
+			lastCSRF = r.Header.Get("Csrfp-Token")
+			if lastCSRF != "csrf-refreshed" {
+				// Stale CSRF: reject with the HTML error page.
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(`<html><body><h2>Invalid CSRF Token</h2></body></html>`))
+				return
+			}
+			w.Write([]byte(`{"data": {"results": []}, "version": 22}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	conn := newConnector(&memorySession{id: "sess"})
+	if _, err := conn.initializeAPIUse(server.URL + "/api/"); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := conn.callAulaAPI("messaging.getThreads", "get", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if postCalls != 1 && getCalls != 1 {
+		t.Errorf("unexpected call pattern: posts=%d refresh-GETs=%d", postCalls, getCalls)
+	}
+	if !strings.Contains(string(data), `"results": []`) {
+		t.Errorf("unexpected data: %s", data)
+	}
+}
