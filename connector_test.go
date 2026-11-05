@@ -198,6 +198,45 @@ func TestCallAulaAPI403JSON(t *testing.T) {
 	}
 }
 
+// TestCallAulaAPI403AccessDenied verifies HTTP 403 with Aula status code 403
+// and an empty subCode/message (the observed shape when a call is rejected
+// for an otherwise valid session) maps to AccessDeniedError — a retryable
+// denial, not an invalid session.
+func TestCallAulaAPI403AccessDenied(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "profiles.getProfilesByLogin") {
+			w.Write([]byte(`{"data": {}, "version": 22}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"status": {"code": 403, "subCode": 0, "message": ""}}`))
+	}))
+	defer server.Close()
+
+	conn := newConnector(&memorySession{id: "sess"})
+	if _, err := conn.initializeAPIUse(server.URL + "/api/"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := conn.callAulaAPI("calendar.getEventsByProfileIdsAndResourceIds", "get", nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var denied *AccessDeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("expected AccessDeniedError, got %T: %v", err, err)
+	}
+	if !strings.Contains(denied.Message, "calendar.getEventsByProfileIdsAndResourceIds") {
+		t.Errorf("unexpected message: %q", denied.Message)
+	}
+
+	var invalidSession *InvalidSessionError
+	if errors.As(err, &invalidSession) {
+		t.Error("AccessDeniedError must not be classified as InvalidSessionError")
+	}
+}
+
 // TestCallAulaAPI403HTML verifies a 403 with an HTML body is reported verbatim.
 func TestCallAulaAPI403HTML(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -184,6 +184,18 @@ func (c *connector) callAulaAPI(aulaMethod, httpMethod string, postData any) (js
 		}
 
 		if parsed.Status.Code != nil {
+			switch *parsed.Status.Code {
+			case aulaCodeAccessDenied:
+				// The token may still be valid (unlike the invalid-session
+				// code 448): a retry often suffices.
+				return nil, &AccessDeniedError{APIError{
+					Message:        fmt.Sprintf("Access denied while calling API method '%s' (Aula code 403, empty message): the call was rejected, but the session may still be valid — retry, and re-login (secure login step-up) if it keeps failing.", aulaMethod),
+					HTTPStatus:     status,
+					AulaStatusCode: parsed.Status.Code,
+					AulaSubCode:    parsed.Status.SubCode,
+					AulaMessage:    parsed.Status.Message,
+				}}
+			}
 			sessionID := c.lastUsedSessionID
 			if sessionID == "" {
 				sessionID = "unknown"

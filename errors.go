@@ -46,3 +46,21 @@ func NewInvalidSessionError(msg string) *InvalidSessionError {
 func invalidSessionf(format string, args ...any) *InvalidSessionError {
 	return &InvalidSessionError{APIError{Message: fmt.Sprintf(format, args...)}}
 }
+
+// aulaCodeAccessDenied is the Aula status code observed when Aula answers
+// HTTP 403 with this code and an empty message while rejecting an API call
+// for a session token that may still be valid — e.g. transient CSRF-token
+// or cookie state after a re-login/token rotation, or methods the session
+// genuinely lacks permission for. Not to be confused with the HTTP status,
+// which is also 403 in that reply.
+const aulaCodeAccessDenied = 403
+
+// AccessDeniedError is returned for that case: the call was rejected but the
+// session is not necessarily invalid (that is InvalidSessionError, Aula code
+// 448). Retrying may work; re-login (with the secure-login step-up) if the
+// method keeps failing.
+type AccessDeniedError struct {
+	APIError
+}
+
+func (e *AccessDeniedError) Error() string { return e.Message }

@@ -306,6 +306,13 @@ func emit(jsonOut bool, result any, human func(*strings.Builder)) {
 
 // failSession reports a session/login failure with an actionable message.
 func failSession(err error) {
+	denied := new(aula.AccessDeniedError)
+	if errors.As(err, &denied) {
+		fmt.Fprintf(os.Stderr, "goaula: %v\n", err)
+		fmt.Fprintln(os.Stderr, "       Retry the command; if it keeps failing, run 'goaula login'")
+		fmt.Fprintln(os.Stderr, "       and complete the secure-login step-up for elevated methods.")
+		return
+	}
 	invalid := new(aula.InvalidSessionError)
 	if errors.As(err, &invalid) {
 		fmt.Fprintf(os.Stderr, "goaula: %v\n", err)
