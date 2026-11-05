@@ -1,10 +1,13 @@
 package aula
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestAlbums verifies the album listing makes one getAlbums call (and no
@@ -141,5 +144,87 @@ func TestMediaForAlbum(t *testing.T) {
 		if !strings.Contains(gotQuery, want) {
 			t.Errorf("query %q missing %q", gotQuery, want)
 		}
+	}
+}
+
+// TestCalendarEventsChunking emulates Aula's measured 50-day span cap: any
+// request whose start..end window exceeds it answers HTTP 403 with Aula code
+// 403. A year-long request must transparently page in chunks, cover every
+// day, and dedupe the boundary-overlap event.
+func TestCalendarEventsChunking(t *testing.T) {
+	layout := "2006-01-02 15:04:05.000Z07:00"
+	calendarCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "profiles.getProfilesByLogin") {
+			w.Write([]byte(`{"data": {}, "version": 22}`))
+			return
+		}
+		if strings.Contains(r.URL.RawQuery, "calendar.getEvents") {
+			calendarCalls++
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read body: %v", err)
+			}
+			var req struct {
+				Start string `json:"start"`
+				End   string `json:"end"`
+			}
+			_ = json.Unmarshal(body, &req)
+			s, sErr := time.Parse(layout, req.Start)
+			e, eErr := time.Parse(layout, req.End)
+			if sErr != nil || eErr != nil || e.Before(s) {
+				t.Errorf("bad calendar window: start=%q end=%q", req.Start, req.End)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if window := int(e.Sub(s).Hours() / 24); window > 50 {
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(`{"status": {"code": 403, "subCode": 0, "message": ""}}`))
+				return
+			}
+			// One unique event per day inside the window, plus a boundary
+			// event at the exact (overlapping) end timestamp. IDs are
+			// absolute-date based, so overlapping days share IDs — like the
+			// real API's stable event IDs.
+			var events []CalendarEvent
+			for d := 0; d <= int(e.Sub(s).Hours()/24); d++ {
+				day := s.AddDate(0, 0, d)
+				events = append(events, CalendarEvent{
+					ID:            int64(day.Year()*1000 + day.YearDay()),
+					StartDateTime: day.UTC().Format(time.RFC3339),
+					Title:         "event " + day.UTC().Format("2006-01-02"),
+				})
+			}
+			boundary := CalendarEvent{ID: 987654, StartDateTime: e.UTC().Format(time.RFC3339), Title: "boundary"}
+			events = append(events, boundary)
+			raw, _ := MarshalJSON(events)
+			w.Write([]byte(`{"data": ` + string(raw) + `, "version": 22}`))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(&Config{Session: &StaticSessionProvider{}, APIURL: server.URL + "/api/"})
+	if err := client.Login(); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := client.CalendarEvents(100, 100, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calendarCalls < 3 {
+		t.Errorf("expected >=3 chunked calls, got %d", calendarCalls)
+	}
+
+	seen := map[int64]int{}
+	for _, e := range events {
+		seen[e.ID]++
+		if seen[e.ID] > 1 {
+			t.Errorf("duplicate event id %d", e.ID)
+		}
+	}
+	// Every day of the 201-day window plus the boundary event.
+	if got := len(events); got < 202 {
+		t.Errorf("expected >=202 unique events, got %d", got)
 	}
 }

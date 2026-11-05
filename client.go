@@ -1009,11 +1009,105 @@ func (c *Client) CalendarEventsExceptLessons(daysInPast, daysInFuture int) ([]Ca
 //	daysInFuture: number of days in the future (default 7)
 //	childIDs:     child IDs to filter by (nil or empty for all children/current context)
 //	eventType:    optional event type filter
-func (c *Client) CalendarEvents(daysInPast, daysInFuture int, childIDs []int64, eventType *CalendarEventType) ([]CalendarEvent, error) {
-	now := time.Now()
-	end := now.AddDate(0, 0, daysInFuture)
-	start := now.AddDate(0, 0, -daysInPast)
+//
+// Aula caps the total requested window (daysInPast + daysInFuture) at
+// calendarSpanCapDays days — longer windows answer HTTP 403 with Aula status
+// code 403 and an empty message. Longer requests are transparently split into
+// overlapping chunks (deduped by event ID), so callers can ask for years.
+// calendarSpanCapDays is the measured cap of the total window Aula accepts for
+// calendar.getEventsByProfileIdsAndResourceIds: span 50 (past+future) is the
+// largest that works; 51 answers HTTP 403 with Aula status code 403.
+const calendarSpanCapDays = 50
 
+// calendarChunkDays is the span of each chunk when paging a longer window
+// (with calendarChunkOverlapDays on the boundaries, deduped by event ID).
+const (
+	calendarChunkDays        = 45
+	calendarChunkOverlapDays = 2
+	calendarMaxChunks        = 60 // hard stop for absurd windows (~9 years)
+)
+
+func (c *Client) CalendarEvents(daysInPast, daysInFuture int, childIDs []int64, eventType *CalendarEventType) ([]CalendarEvent, error) {
+	start := time.Now().AddDate(0, 0, -daysInPast)
+	end := time.Now().AddDate(0, 0, daysInFuture)
+
+	span := int(end.Sub(start).Hours() / 24)
+	if span < 0 {
+		span = 0
+	}
+
+	var events []CalendarEvent
+	if span <= calendarSpanCapDays {
+		var err error
+		events, err = c.calendarEventsBetween(start, end, childIDs)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Page in chunks. Boundaries overlap so boundary-day events are never
+		// missed; duplicates are removed below.
+		chunkStart := start
+		chunk := 0
+		for chunkStart.Before(end) && chunk < calendarMaxChunks {
+			windowEnd := chunkStart.AddDate(0, 0, calendarChunkDays)
+			if windowEnd.After(end) {
+				windowEnd = end
+			}
+			part, err := c.calendarEventsBetween(chunkStart, windowEnd, childIDs)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, part...)
+			if !windowEnd.Before(end) {
+				break
+			}
+			// Rewind by the overlap so the next chunk re-covers the boundary.
+			chunkStart = windowEnd.AddDate(0, 0, -calendarChunkOverlapDays)
+			chunk++
+		}
+		if chunk >= calendarMaxChunks && chunkStart.Before(end) {
+			return nil, NewAPIError(fmt.Sprintf(
+				"calendar window exceeds %d chunks (~%d days); narrowing the request is not practical",
+				calendarMaxChunks, calendarMaxChunks*calendarChunkDays))
+		}
+	}
+
+	// Remove boundary-overlap duplicates, keeping the first occurrence. The
+	// event ID is the primary key; the time+title composite only matters for
+	// ID-less events.
+	if len(events) > 0 {
+		seen := make(map[string]bool, len(events))
+		deduped := events[:0]
+		for _, e := range events {
+			key := fmt.Sprintf("t|%s|%s", e.StartDateTime, e.Title)
+			if e.ID != 0 {
+				key = fmt.Sprintf("i|%d", e.ID)
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			deduped = append(deduped, e)
+		}
+		events = deduped
+	}
+
+	if eventType != nil {
+		var filtered []CalendarEvent
+		for _, e := range events {
+			if e.EventType() == *eventType {
+				filtered = append(filtered, e)
+			}
+		}
+		events = filtered
+	}
+
+	return events, nil
+}
+
+// calendarEventsBetween performs the single calendar POST for one window and
+// parses the events.
+func (c *Client) calendarEventsBetween(start, end time.Time, childIDs []int64) ([]CalendarEvent, error) {
 	institutionProfileIDs := c.institutionProfileIDsForChildren(childIDs)
 
 	postData := map[string]any{
@@ -1032,17 +1126,6 @@ func (c *Client) CalendarEvents(daysInPast, daysInFuture int, childIDs []int64, 
 	if err := unmarshalJSON(data, &events); err != nil {
 		return nil, fmt.Errorf("failed to parse calendar events: %w", err)
 	}
-
-	if eventType != nil {
-		var filtered []CalendarEvent
-		for _, e := range events {
-			if e.EventType() == *eventType {
-				filtered = append(filtered, e)
-			}
-		}
-		events = filtered
-	}
-
 	return events, nil
 }
 
